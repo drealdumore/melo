@@ -1,0 +1,13 @@
+allowBuilds:
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@expo/ui@57.0.21'
+  - expo-constants@57.0.20
+  - expo-modules-core@57.0.20
+  - expo-router@57.0.24
+  - expo@57.0.26
+# `expo-asset` depends on `expo-constants@^57.0.19` while the app depends on
+# `~57.0.20`, so pnpm would install two copies of a native module. Pinning it
+# to one version keeps a single native build of expo-constants.
+overrides:
+  expo-constants: 57.0.20

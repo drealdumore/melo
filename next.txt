@@ -1,0 +1,38 @@
+## Design direction: "Honkish" (replaces the minimal/Apple-like direction)
+
+Melo should feel like a toy that happens to be a great translator. Playful, tactile, and full of presence. Reference: https://benji.org/honkish. Keep the palette and logo, but change the personality: bolder, bouncier, more physical.
+
+Principles
+1. Presence over polish: you should feel your friend is in the room.
+2. Every action gets a reaction: motion, haptics, and optionally sound.
+3. Small delights, big restraint: no feature exists just to be busy, and every animation shows what changed.
+4. Playful never blocks function: the original text and honest translation states stay one tap away.
+
+Chat presence
+- Avatar ring fills in over 400ms when the friend enters the chat, with a light haptic.
+- When they leave, a short burst of waving emoji, or a "goodbye" in their language.
+- Dashed avatar outline when the friend is online but in another part of the app (add a `screen` field to Presence).
+- Typing bubble grows while the friend types, shrinks when they pause. Show the translated text only after send.
+- Double-tap a bubble to drop a heart at the exact tap point (send relative x/y over Broadcast), with an expanding ring and a haptic on both phones. Store nothing.
+
+Language-flavored delights (Melo-only)
+- On friend arrival, a small "hello" in their reading language pops beside the avatar.
+- The "Translated" caption does a small shimmer as the translation lands.
+- Tapping to reveal the original uses a springy expand and a slight bubble tilt.
+
+Little details
+- Composer clear: a small trash icon fills as the message grows and shakes near the limit.
+- Buttons squash slightly on press (scale 0.96, spring), release with a haptic.
+- Copy-ID confetti of 6 to 8 tiny Ember dots.
+- Empty state: an animated waving mark instead of text alone.
+
+Type and shape
+- System font, but use heavier weights and bigger sizes for message text (18 to 20) so the chat feels chunky and friendly.
+- Rounder bubbles (radius 24), thicker avatars, more saturated Ember.
+- Sound is optional: if added, use `expo-audio` with 3 sounds (send, arrive, friend joins), off by default with a toggle.
+
+All of this ships in Phase 9, after the core chat works end to end. Presence and heart-tap use Realtime Broadcast only.
+
+
+
+

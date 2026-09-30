@@ -3,6 +3,11 @@
 # dependencies
 node_modules/
 
+# This project uses pnpm; keep other package managers' lockfiles out so
+# EAS Build does not infer the wrong one.
+package-lock.json
+yarn.lock
+
 # Expo
 .expo/
 dist/
@@ -31,7 +36,9 @@ yarn-error.*
 *.pem
 
 # local env files
-.env*.local
+.env
+.env.*
+!.env.example
 
 # typescript
 *.tsbuildinfo
