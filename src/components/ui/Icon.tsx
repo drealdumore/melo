@@ -1,8 +1,3 @@
-/**
- * A tiny, deliberate icon set drawn with react-native-svg. Keeping our own
- * strokes — rather than pulling in an icon font — means every glyph shares the
- * same weight and rounded caps as the Melo mark.
- */
 import { memo } from 'react';
 import Svg, { Circle, Path } from 'react-native-svg';
 
@@ -43,7 +38,7 @@ function IconComponent({ name, size = 24, color, strokeWidth = 2 }: IconProps) {
 
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" accessibilityRole="image">
-      {name === 'check' && <Path d="M4 12.5 9.5 18 20 6.5" {...stroke} />}
+      {name === 'check' && <Path d="M5 13.2592L7.58583 15.9568C8.2525 16.6523 8.58583 17 9.00004 17C9.41425 17 9.74759 16.6523 10.4143 15.9568L19 7" {...stroke} />}
       {name === 'checkDouble' && (
         <>
           <Path d="M2 12.5 6.5 17 15 6.5" {...stroke} />
@@ -74,11 +69,8 @@ function IconComponent({ name, size = 24, color, strokeWidth = 2 }: IconProps) {
       )}
       {name === 'copy' && (
         <>
-          <Path d="M9 9V6.5A1.5 1.5 0 0 1 10.5 5h7A1.5 1.5 0 0 1 19 6.5v7a1.5 1.5 0 0 1-1.5 1.5H15" {...stroke} />
-          <Path
-            d="M6.5 9h7A1.5 1.5 0 0 1 15 10.5v7A1.5 1.5 0 0 1 13.5 19h-7A1.5 1.5 0 0 1 5 17.5v-7A1.5 1.5 0 0 1 6.5 9Z"
-            {...stroke}
-          />
+          <Path d="M7.5 14.5C7.5 11.2002 7.5 9.55025 8.52513 8.52513C9.55025 7.5 11.2002 7.5 14.5 7.5C17.7998 7.5 19.4497 7.5 20.4749 8.52513C21.5 9.55025 21.5 11.2002 21.5 14.5C21.5 17.7998 21.5 19.4497 20.4749 20.4749C19.4497 21.5 17.7998 21.5 14.5 21.5C11.2002 21.5 9.55025 21.5 8.52513 20.4749C7.5 19.4497 7.5 17.7998 7.5 14.5Z" {...stroke} />
+          <Path d="M7.5 16.5C6.10355 16.5 5.40533 16.5 4.84402 16.3036C3.83866 15.9518 3.0482 15.1613 2.69641 14.156C2.5 13.5947 2.5 12.8964 2.5 11.5V9.5C2.5 6.20017 2.5 4.55025 3.52513 3.52513C4.55025 2.5 6.20017 2.5 9.5 2.5H11.5C12.8964 2.5 13.5947 2.5 14.156 2.69641C15.1613 3.0482 15.9518 3.83866 16.3036 4.84402C16.5 5.40533 16.5 6.10355 16.5 7.5" {...stroke} />
         </>
       )}
       {name === 'share' && (

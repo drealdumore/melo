@@ -4,12 +4,12 @@
  * uses this, so the chrome is identical everywhere.
  */
 import { StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme } from '@/hooks/useTheme';
+import { useScreenInsets } from '@/hooks/useScreenInsets';
 import { AnimatedPressable, usePressable } from '@/hooks/usePressable';
 import { IconButton } from '@/components/ui/IconButton';
-import { initialsOf } from '@/components/ui/Avatar';
+import { Avatar } from '@/components/ui/Avatar';
 
 export interface ScreenHeaderProps {
   title: string;
@@ -18,6 +18,7 @@ export interface ScreenHeaderProps {
   showBack?: boolean;
   /** Opens the profile sheet. Omit to leave the right side empty. */
   userName?: string;
+  userAvatarKey?: string | null;
   onPressUser?: () => void;
 }
 
@@ -26,16 +27,17 @@ export function ScreenHeader({
   onBack,
   showBack = true,
   userName,
+  userAvatarKey,
   onPressUser,
 }: ScreenHeaderProps) {
-  const { colors, typography, screenPadding, spacing } = useTheme();
-  const insets = useSafeAreaInsets();
+  const { colors, typography, screenPadding } = useTheme();
+  const { headerTop } = useScreenInsets();
 
   return (
     <View
       style={[
         styles.header,
-        { paddingTop: insets.top + spacing.sm, paddingHorizontal: screenPadding },
+        { paddingTop: headerTop, paddingHorizontal: screenPadding },
       ]}
     >
       <View style={styles.side}>
@@ -60,15 +62,13 @@ export function ScreenHeader({
       </Text>
 
       <View style={[styles.side, styles.sideRight]}>
-        {userName && onPressUser ? <InitialButton name={userName} onPress={onPressUser} /> : null}
+        {userName && onPressUser ? <AvatarButton name={userName} avatarKey={userAvatarKey} onPress={onPressUser} /> : null}
       </View>
     </View>
   );
 }
 
-/** The header's right-hand initial: 38pt, and a target big enough to hit. */
-function InitialButton({ name, onPress }: { name: string; onPress: () => void }) {
-  const { colors, typography, isDark } = useTheme();
+function AvatarButton({ name, avatarKey, onPress }: { name: string; avatarKey?: string | null; onPress: () => void }) {
   const { onPressIn, onPressOut, style } = usePressable();
 
   return (
@@ -79,20 +79,9 @@ function InitialButton({ name, onPress }: { name: string; onPress: () => void })
       accessibilityRole="button"
       accessibilityLabel="Open your profile"
       testID="header-initial"
-      style={[
-        styles.initial,
-        { backgroundColor: colors.accentTint, borderColor: colors.border },
-        style,
-      ]}
+      style={style}
     >
-      <Text
-        style={[
-          typography.bodyStrong,
-          { color: isDark ? colors.textPrimary : colors.accent, fontSize: 17 },
-        ]}
-      >
-        {initialsOf(name).slice(0, 1)}
-      </Text>
+      <Avatar name={name} avatarKey={avatarKey} size={38} />
     </AnimatedPressable>
   );
 }
@@ -103,5 +92,5 @@ const styles = StyleSheet.create({
   side: { width: 44, alignItems: 'flex-start' },
   sideRight: { alignItems: 'flex-end' },
   title: { flex: 1, textAlign: 'center' },
-  initial: { borderRadius: 19, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
+
 });

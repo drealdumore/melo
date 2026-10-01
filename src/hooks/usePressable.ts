@@ -18,6 +18,7 @@ import Animated, {
   withSpring,
   withTiming,
   type AnimatedStyle,
+  type SharedValue,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 
@@ -41,6 +42,8 @@ export interface PressableFeedback {
    * every consumer spreads this straight into a `style` array.
    */
   style: AnimatedStyle<ViewStyle> | StyleProp<ViewStyle>;
+  /** Shared value 0 -> 1 tracking the press progress for child micro-interactions. */
+  progress: SharedValue<number>;
 }
 
 export interface PressableOptions {
@@ -78,7 +81,7 @@ export function usePressable({
       : { transform: [{ scale: 1 - progress.value * (1 - scale) }] }
   );
 
-  return { onPressIn, onPressOut, style };
+  return { onPressIn, onPressOut, style, progress };
 }
 
 /** Convenience: the same three props, typed for spreading into a pressable. */

@@ -1,20 +1,15 @@
-/**
- * Avatars are initials, not photos and not the logo — Melo has three users and
- * no image upload, so a letter is the honest representation.
- *
- * The presence ring is the interesting part: a solid `success` ring while the
- * friend is in this chat, a dashed muted ring while they are in the app
- * somewhere else, and nothing at all while they are away.
- */
+
 import { useEffect } from 'react';
-import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Image, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import Svg, { Circle } from 'react-native-svg';
 
+import { avatarSource, type AvatarKey } from '@/constants/avatars';
 import { useTheme } from '@/hooks/useTheme';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import type { PresenceState } from '@/types/models';
@@ -31,6 +26,8 @@ export function initialsOf(name: string): string {
 
 export interface AvatarProps {
   name: string;
+  /** Slug from `profiles.avatar_key`. Unknown or absent falls back to initials. */
+  avatarKey?: AvatarKey | string | null;
   size?: number;
   presence?: PresenceState;
   /** Dashed ring instead of a solid one: in the app, but not here. */
@@ -45,6 +42,7 @@ const RING_WIDTH = 3;
 
 export function Avatar({
   name,
+  avatarKey,
   size = 46,
   presence = 'offline',
   idle = false,
@@ -57,6 +55,7 @@ export function Avatar({
   const online = presence === 'online';
 
   const ring = useSharedValue(animateRing && online ? 0 : 1);
+  const source = avatarSource(avatarKey);
 
   useEffect(() => {
     if (!animateRing) return;
@@ -81,7 +80,34 @@ export function Avatar({
       accessibilityLabel={label}
       testID={testID}
     >
-      {online ? (
+      {online && idle ? (
+        <Animated.View
+          style={[
+            styles.dashedRing,
+            {
+              width: size + RING_WIDTH * 2,
+              height: size + RING_WIDTH * 2,
+            },
+            ringStyle,
+          ]}
+        >
+          <Svg
+            width={size + RING_WIDTH * 2}
+            height={size + RING_WIDTH * 2}
+            viewBox={`0 0 ${size + RING_WIDTH * 2} ${size + RING_WIDTH * 2}`}
+          >
+            <Circle
+              cx={size + RING_WIDTH}
+              cy={size + RING_WIDTH}
+              r={size / 2 + RING_WIDTH / 2}
+              fill="none"
+              stroke={colors.textMuted}
+              strokeWidth={RING_WIDTH}
+              strokeDasharray={[4, 4]}
+            />
+          </Svg>
+        </Animated.View>
+      ) : online ? (
         <Animated.View
           style={[
             styles.ring,
@@ -89,10 +115,8 @@ export function Avatar({
               width: size + RING_WIDTH * 2,
               height: size + RING_WIDTH * 2,
               borderRadius: (size + RING_WIDTH * 2) / 2,
-              // "Elsewhere" is deliberately quieter than "here now".
-              borderColor: idle ? colors.textMuted : colors.success,
+              borderColor: colors.success,
             },
-            idle ? styles.ringDashed : null,
             ringStyle,
           ]}
         />
@@ -110,14 +134,23 @@ export function Avatar({
           },
         ]}
       >
-        <Text
-          style={[
-            typography.bodyStrong,
-            { color: isDark ? colors.textPrimary : colors.accent, fontSize: size * 0.38 },
-          ]}
-        >
-          {initialsOf(name)}
-        </Text>
+        {source ? (
+          <Image
+            source={source}
+            style={{ width: size, height: size }}
+            resizeMode="cover"
+            accessibilityIgnoresInvertColors
+          />
+        ) : (
+          <Text
+            style={[
+              typography.bodyStrong,
+              { color: isDark ? colors.textPrimary : colors.accent, fontSize: size * 0.38 },
+            ]}
+          >
+            {initialsOf(name)}
+          </Text>
+        )}
       </View>
     </View>
   );
@@ -126,6 +159,11 @@ export function Avatar({
 const styles = StyleSheet.create({
   center: { alignItems: 'center', justifyContent: 'center' },
   ring: { position: 'absolute', borderWidth: RING_WIDTH },
-  ringDashed: { borderStyle: 'dashed', opacity: 0.55 },
-  disc: { alignItems: 'center', justifyContent: 'center', borderWidth: StyleSheet.hairlineWidth },
+  dashedRing: { position: 'absolute', opacity: 0.55 },
+  disc: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: 'hidden',
+  },
 });

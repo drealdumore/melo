@@ -3,7 +3,15 @@
  * haptic. Everything about it is a token, so a screen cannot get the height,
  * radius, or disabled treatment wrong.
  */
-import { ActivityIndicator, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import {
+  ActivityIndicator,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type TextStyle,
+  type ViewStyle,
+} from 'react-native';
 
 import { useTheme } from '@/hooks/useTheme';
 import { AnimatedPressable, usePressable } from '@/hooks/usePressable';
@@ -17,7 +25,9 @@ export interface ButtonProps {
   variant?: ButtonVariant;
   disabled?: boolean;
   loading?: boolean;
+  loadingLabel?: string;
   icon?: IconName;
+  rightIcon?: IconName;
   /** 54pt in the onboarding flow and on Connect. */
   size?: 'primary' | 'compact';
   /**
@@ -27,6 +37,7 @@ export interface ButtonProps {
    */
   haptic?: boolean;
   style?: StyleProp<ViewStyle>;
+  labelStyle?: StyleProp<TextStyle>;
   accessibilityLabel?: string;
   testID?: string;
 }
@@ -37,10 +48,13 @@ export function Button({
   variant = 'primary',
   disabled = false,
   loading = false,
+  loadingLabel,
   icon,
+  rightIcon,
   size = 'primary',
   haptic = true,
   style,
+  labelStyle,
   accessibilityLabel,
   testID,
 }: ButtonProps) {
@@ -83,19 +97,27 @@ export function Button({
       ]}
     >
       {loading ? (
-        <ActivityIndicator color={palette.fg} />
+        <View style={styles.content}>
+          <ActivityIndicator color={palette.fg} />
+          {loadingLabel ? (
+            <Text style={[typography.bodyStrong, { color: palette.fg }, labelStyle]} numberOfLines={1}>
+              {loadingLabel}
+            </Text>
+          ) : null}
+        </View>
       ) : (
         <View style={styles.content}>
           {icon ? <Icon name={icon} size={20} color={palette.fg} strokeWidth={2.4} /> : null}
-          <Text style={[typography.bodyStrong, { color: palette.fg }]} numberOfLines={1}>
+          <Text style={[typography.bodyStrong, { color: palette.fg }, labelStyle]} numberOfLines={1}>
             {label}
           </Text>
+          {rightIcon ? <Icon name={rightIcon} size={20} color={palette.fg} strokeWidth={2.4} /> : null}
         </View>
       )}
     </AnimatedPressable>
   );
 }
 
-const styles = {
+const styles = StyleSheet.create({
   content: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-} as const;
+});

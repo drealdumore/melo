@@ -7,34 +7,53 @@
     "icon": "./assets/icon.png",
     "scheme": "melo",
     "userInterfaceStyle": "automatic",
-    "primaryColor": "#ff8a2b",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.melo.chat"
     },
     "android": {
       "package": "app.melo.chat",
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/icon.png"
     },
     "plugins": [
       "expo-router",
+      "expo-system-ui",
+      [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false,
+          "hidden": false,
+          "style": "light"
+        }
+      ],
       [
         "expo-splash-screen",
         {
           "backgroundColor": "#FAF9F7",
           "image": "./assets/splash-icon.png",
-          "imageWidth": 132,
-          "resizeMode": "contain"
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "dark": {
+            "backgroundColor": "#0E0E10",
+            "image": "./assets/splash-icon.png"
+          }
         }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "b15f762c-6487-47f0-a82b-9832a1bd9aac"
+      }
     }
   }
 }

@@ -15,6 +15,16 @@ export const spacing = {
 
 export const screenPadding = spacing.xl;
 
+/**
+ * Safe-area padding, consumed through `useScreenInsets` rather than raw insets.
+ *
+ * `headerGap` is added to `insets.top`; `footerGap` is a floor for `insets.bottom`,
+ * because a home indicator is already generous and summing pushes pinned bars too far
+ * from the edge. See the hook for why the two edges differ.
+ */
+export const headerGap = spacing.sm;
+export const footerGap = spacing.md;
+
 export const radii = {
   /** Message bubbles; the tail-side bottom corner tightens to `bubbleTail`. */
   bubble: 22,

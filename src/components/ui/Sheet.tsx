@@ -1,124 +1,188 @@
-/**
- * A bottom sheet built on `@gorhom/bottom-sheet`.
- *
- * `BottomSheetModal` rather than the inline `BottomSheet`, because it renders
- * through a portal and therefore keeps the native modal semantics the old
- * `Modal` version had: it sits above the navigator, it owns the hardware back
- * button, and it does not inherit the calling screen's transform.
- *
- * The imperative `present()` / `dismiss()` pair is hidden behind the old
- * declarative `visible` prop, so nothing outside this file has to know the
- * library is here.
- */
-import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import BottomSheet, {
-  BottomSheetBackdrop,
-  BottomSheetModal,
-  BottomSheetScrollView,
-  type BottomSheetBackdropProps,
-} from '@gorhom/bottom-sheet';
-import { ReduceMotion } from 'react-native-reanimated';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Dimensions, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, {
+  Extrapolation,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
+
+import { useTheme } from '@/hooks/useTheme';
+import { useScreenInsets } from '@/hooks/useScreenInsets';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { AnimatedPressable, usePressable } from '@/hooks/usePressable';
-import { useTheme } from '@/hooks/useTheme';
 import { IconButton } from '@/components/ui/IconButton';
+import { duration } from '@/theme/motion';
+
+const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
+const MAX_SHEET_FRACTION = 0.86;
+const MIN_SHEET_HEIGHT = SCREEN_HEIGHT * 0.25;
+const SHEET_SPRING = { duration: 300, dampingRatio: 0.8, overshootClamping: true };
+const PROJECTION_DECELERATION = 0.998;
 
 export interface SheetProps {
   visible: boolean;
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-  /** Disables backdrop tap and drag-to-dismiss, e.g. while something is saving. */
   dismissable?: boolean;
 }
 
-/** Matches the `maxHeight: '86%'` the Modal version used. */
-const MAX_SHEET_FRACTION = 0.86;
-/** Rough height of the pinned title row, so the body scrolls under the cap. */
-const HEADER_ALLOWANCE = 72;
-
 export function Sheet({ visible, onClose, title, children, dismissable = true }: SheetProps) {
-  const sheetRef = useRef<BottomSheetModal>(null);
-  const { colors, typography, spacing, radii } = useTheme();
+  const { colors, typography, radii } = useTheme();
+  const { footerBottom: bottomPadding } = useScreenInsets();
   const reduced = useReducedMotion();
-  const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
-  const maxSheetHeight = Math.round(windowHeight * MAX_SHEET_FRACTION);
+  const maxSheetHeight = SCREEN_HEIGHT * MAX_SHEET_FRACTION;
+
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+  const sheetHeight = Math.min(
+    Math.max(measuredHeight ?? maxSheetHeight, MIN_SHEET_HEIGHT),
+    maxSheetHeight
+  );
+
+  const sheetH = useSharedValue(sheetHeight);
+  const offset = useSharedValue(sheetHeight);
+  const isDismissing = useSharedValue(false);
 
   useEffect(() => {
-    if (visible) sheetRef.current?.present();
-    else sheetRef.current?.dismiss();
-  }, [visible]);
+    sheetH.value = sheetHeight;
+    if (!visible) offset.value = sheetHeight;
+  }, [sheetHeight, visible, offset, sheetH]);
 
-  /**
-   * Fires for a backdrop tap, a drag-down, and a programmatic `dismiss()` alike.
-   * The `visible` check is what stops a parent-driven close from calling
-   * `onClose` a second time: by the time the dismissal lands, `visible` is
-   * already false, so only a genuine user dismissal propagates.
-   */
-  const handleDismiss = useCallback(() => {
-    if (visible) onClose();
-  }, [visible, onClose]);
+  useEffect(() => {
+    if (visible) {
+      isDismissing.value = false;
+      offset.value = reduced
+        ? withTiming(0, { duration: duration.base })
+        : withSpring(0, SHEET_SPRING);
+    } else {
+      if (!isDismissing.value) {
+        offset.value = reduced
+          ? withTiming(sheetH.value, { duration: duration.base })
+          : withSpring(sheetH.value, SHEET_SPRING);
+      }
+    }
+  }, [visible, reduced, offset, sheetH, isDismissing]);
 
-  const renderBackdrop = useCallback(
-    (props: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop
-        {...props}
-        // Flat dim, matching the old `rgba(0,0,0,0.4)`. No gradient.
-        appearsOnIndex={0}
-        disappearsOnIndex={-1}
-        pressBehavior={dismissable ? 'close' : 'none'}
-        opacity={0.4}
-        style={[StyleSheet.absoluteFill, { backgroundColor: '#000000' }]}
-      />
+  const animateDismiss = useCallback((velocity = 0) => {
+    'worklet';
+    if (isDismissing.value) return;
+    isDismissing.value = true;
+    const completeDismiss = (finished?: boolean) => {
+      'worklet';
+      if (finished) scheduleOnRN(onClose);
+    };
+    offset.value = reduced
+      ? withTiming(sheetH.value, { duration: duration.base }, completeDismiss)
+      : withSpring(
+          sheetH.value,
+          { ...SHEET_SPRING, velocity },
+          completeDismiss
+        );
+  }, [onClose, offset, isDismissing, sheetH, reduced]);
+
+  const panGesture = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(dismissable)
+        .activeOffsetY([-10, 10])
+        .onChange((e) => {
+          if (isDismissing.value) return;
+          offset.value = Math.max(0, Math.min(sheetH.value, offset.value + e.changeY));
+        })
+        .onEnd((e) => {
+          if (isDismissing.value) return;
+          const projectedOffset =
+            offset.value +
+            (e.velocityY / 1000 * PROJECTION_DECELERATION) / (1 - PROJECTION_DECELERATION);
+          if (projectedOffset > sheetH.value * 0.4) {
+            animateDismiss(e.velocityY);
+          } else if (reduced) {
+            offset.value = withTiming(0, { duration: duration.base });
+          } else {
+            offset.value = withSpring(0, {
+              ...SHEET_SPRING,
+              velocity: e.velocityY,
+            });
+          }
+        }),
+    [animateDismiss, dismissable, isDismissing, offset, reduced, sheetH]
+  );
+
+  const backdropTap = useMemo(
+    () =>
+      Gesture.Tap()
+        .enabled(dismissable)
+        .onEnd(() => {
+          if (isDismissing.value) return;
+          animateDismiss();
+        }),
+    [animateDismiss, dismissable, isDismissing]
+  );
+
+  const backdropStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(
+      offset.value,
+      [0, sheetH.value],
+      [1, 0],
+      Extrapolation.CLAMP
     ),
-    [dismissable]
+  }));
+  const sheetStyle = useAnimatedStyle(() => ({ transform: [{ translateY: offset.value }] }));
+
+  const handleArea = (
+    <View style={styles.handleArea}>
+      <View style={[styles.handle, { backgroundColor: colors.border }]} />
+      <View style={styles.titleRow}>
+        <Text style={[typography.screenTitle, { color: colors.textPrimary, flex: 1 }]} numberOfLines={1}>
+          {title}
+        </Text>
+        {dismissable ? (
+          <IconButton name="close" onPress={onClose} accessibilityLabel="Close" />
+        ) : null}
+      </View>
+    </View>
   );
 
   return (
-    <BottomSheetModal
-      ref={sheetRef}
-      // Content-sized, capped the way the Modal version capped it. `snapPoints`
-      // would be the other way to size this, but it would mean every call site
-      // has to know its own height. v5 dropped `maxDynamicSize`, so the cap
-      // lives on the inner sheet's `style` instead.
-      enableDynamicSizing
-      enablePanDownToClose={dismissable}
-      onDismiss={handleDismiss}
-      backgroundStyle={{
-        backgroundColor: colors.surface,
-        borderTopLeftRadius: radii.card,
-        borderTopRightRadius: radii.card,
-      }}
-      handleIndicatorStyle={styles.noHandle}
-      // Reduce Motion trades the automatic travel for a plain appear. The pan
-      // gesture stays enabled: that is direct manipulation the user is driving,
-      // not autonomous motion, and it is the only dismiss affordance a screen
-      // reader user needs here.
-      overrideReduceMotion={reduced ? ReduceMotion.Always : ReduceMotion.System}
-      backdropComponent={renderBackdrop}
-    >
-      <BottomSheet
-        // No `flex: 1`: with dynamic sizing the sheet is content-height, and
-        // flexing it would defeat the measurement.
-        style={{ maxHeight: maxSheetHeight, paddingBottom: Math.max(insets.bottom, spacing.md) }}
+    <View style={StyleSheet.absoluteFill} pointerEvents={visible ? 'auto' : 'none'}>
+      <GestureDetector gesture={backdropTap}>
+        <Animated.View style={[styles.backdrop, backdropStyle]} />
+      </GestureDetector>
+
+      <Animated.View
+        style={[
+          styles.sheet,
+          {
+            backgroundColor: colors.sheet,
+            borderTopLeftRadius: radii.card,
+            borderTopRightRadius: radii.card,
+            height: sheetHeight,
+            paddingBottom: bottomPadding,
+          },
+          sheetStyle,
+        ]}
       >
-        <View style={styles.header}>
-          <Text
-            style={[typography.screenTitle, { color: colors.textPrimary, flex: 1 }]}
-            numberOfLines={1}
-          >
-            {title}
-          </Text>
-          {dismissable ? (
-            <IconButton name="close" onPress={onClose} accessibilityLabel="Close" />
-          ) : null}
-        </View>
-        {children}
-      </BottomSheet>
-    </BottomSheetModal>
+        <GestureDetector gesture={panGesture}>
+          {handleArea}
+        </GestureDetector>
+        <View style={styles.content}>{children}</View>
+      </Animated.View>
+
+      {/* Off-screen clone to measure natural content height */}
+      <View
+        pointerEvents="none"
+        style={[styles.measure, { paddingBottom: bottomPadding }]}
+        onLayout={(e) => setMeasuredHeight(e.nativeEvent.layout.height)}
+      >
+        {handleArea}
+        <View style={styles.content}>{children}</View>
+      </View>
+    </View>
   );
 }
 
@@ -181,47 +245,65 @@ export function SheetRow({
   );
 }
 
-/** Non-scrolling variant, for the short profile sheet. */
 export function SheetBody({ children }: { children: React.ReactNode }) {
   return <View>{children}</View>;
 }
 
 export function SheetScroll({ children }: { children: React.ReactNode }) {
-  const { height: windowHeight } = useWindowDimensions();
-
-  // A dynamically-sized sheet measures a ScrollView's *full* content, so without
-  // a cap the sheet would grow to fit every row and never actually scroll. This
-  // leaves room for the header inside the sheet's own 86% ceiling.
-  const maxHeight = useMemo(
-    () => Math.round(windowHeight * MAX_SHEET_FRACTION) - HEADER_ALLOWANCE,
-    [windowHeight]
-  );
-
   return (
-    // The library's scroll view, not RN's: it hands the sheet enough context to
-    // arbitrate between scrolling the list and dragging the sheet down. A plain
-    // ScrollView makes the two gestures fight.
-    <BottomSheetScrollView
-      style={[styles.scroll, { maxHeight }]}
-      contentContainerStyle={styles.scrollContent}
+    <ScrollView
+      style={{ flexShrink: 1 }}
       showsVerticalScrollIndicator={false}
     >
       {children}
-    </BottomSheetScrollView>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  noHandle: { width: 0, height: 0, opacity: 0 },
-  header: {
+  backdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  sheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+  },
+  measure: {
+    position: 'absolute',
+    top: 0,
+    left: -10000,
+    width: SCREEN_WIDTH,
+    opacity: 0,
+  },
+  handleArea: {
+    paddingTop: 10,
+    paddingHorizontal: 20,
+    paddingBottom: 4,
+    alignItems: 'center',
+  },
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    opacity: 0.5,
+    marginBottom: 8,
+  },
+  titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingLeft: 20,
-    paddingRight: 12,
+    alignSelf: 'stretch',
     paddingBottom: 8,
   },
-  scroll: { flexGrow: 0 },
-  scrollContent: { paddingBottom: 8 },
+  content: {
+    flex: 1,
+  },
   row: { flexDirection: 'row', alignItems: 'center' },
   rowText: { flex: 1 },
   rtl: { textAlign: 'right', writingDirection: 'rtl' },

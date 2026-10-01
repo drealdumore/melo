@@ -36,3 +36,30 @@ All of this ships in Phase 9, after the core chat works end to end. Presence and
 
 
 
+and then it should tell me if it saves user info and what happens if 2 users have same name and should the id be related to the username and not just random digit. like if the name is be cool. and also how sdoes it handle user that have already created their account b4..does it just log them in howww?? 
+
+why does the 
+
+    : `Say hello in ${nativeLanguageName(friend.reading_language)}`;
+LOOKS UPSIDE DOWN??
+
+
+
+why does translation still bail when both people read the same language? the check runs on the DECLARED language and returns before we ever ask the service. so if we both read german and my friend types english, nothing detects or translates it. two ways to close it: a detection round trip on every same-language message (costs a request on the common case), or a language picker on the message so the sender can override what they wrote in. probably the picker is better UX but it is a real product decision.
+
+ALSO STILL UNVERIFIED: whether translate.googleapis.com actually fills data[2] with the detected source language. the sandbox cannot reach that host (returns HTML, not JSON) so fix A is only proven against fixtures. run it once on the device and look for `detected:` in the log. if detection is absent the fallback is `failed`, which is correct but just back to today.
+
+RESOLVED — the "Couldn't translate" on messages that were already in the reader's language.
+
+Cause was two separate bugs stacked on each other, both now fixed in src/services/translation.ts:
+
+1. It sent the sender's DECLARED reading language as `sl`. What someone reads is not what they type, so a German-profile user typing English got a 200 with their own words back. Now sends `sl=auto` and reports what the service actually detected.
+2. The echo branch demanded `data[2]` before it would call anything a skip, so an undetected echo fell through to `failed`. The rule is now that an echo is ABSENCE OF EVIDENCE, not evidence of failure: `failed` only when the service said it saw a language other than the target. Undetected echoes are `skipped`. So the fix holds whether or not `data[2]` ever comes back — which is the part that mattered, because that slot is undocumented.
+
+That leaves the two open items from the note above, still open:
+
+STILL OPEN 1 — same-language declared pair still short-circuits before any request. Two people who both list English never get asked what was actually written. The picker is the better product answer (it costs no request on the common case), but it is a real decision, not a bug fix. Note this is a much smaller hole now: it only affects pairs whose declared languages match, and the common shape of that bug (typing in a second language) is at least reachable whenever the declared languages differ.
+
+STILL OPEN 2 — data[2] is still unverified live. Better news than last time: the endpoint IS reachable, it is just rate-limiting this sandbox's IP. Confirmed it answers HTTP 429 with a Google HTML page, which `!response.ok` already catches and retries. So the failure mode is handled; only the detection slot is unproven. Grep the device log for `detected:` — `not reported` means absent, a language code means present.
+
+SPEED work landed alongside: bounded in-memory cache on (target, text), in-flight coalescing so a duplicate request is not sent twice, and a 450ms pause before the retry because the 429 above is exactly what an immediate retry walks into.

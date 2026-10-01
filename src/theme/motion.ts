@@ -9,7 +9,19 @@
  * an animation that is still run collapses to its end value.
  */
 
-import { ReduceMotion } from 'react-native-reanimated';
+import { Easing, FadeIn, FadeInDown, ReduceMotion } from 'react-native-reanimated';
+
+const SCREEN_EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1);
+
+/** Consistent top-to-bottom entrance for screen content. */
+export function screenEnter(delay = 0) {
+  return FadeInDown.duration(220).delay(delay).easing(SCREEN_EASE_OUT);
+}
+
+/** Fade-only counterpart for screen content under Reduce Motion. */
+export function screenFadeEnter(delay = 0) {
+  return FadeIn.duration(180).delay(delay).easing(SCREEN_EASE_OUT);
+}
 
 export const duration = {
   /** Press feedback, colour swaps. */
@@ -41,17 +53,3 @@ export function timingConfig(ms: number) {
 
 /** Press feedback. Spec: 0.95 to 0.97, on a spring. */
 export const pressScale = 0.96;
-
-/** Arrival and send entrance. */
-export const entrance = {
-  /** Friend messages slide up this far. */
-  rise: 10,
-  /** And scale in from here. */
-  from: 0.95,
-} as const;
-
-/** The expanded "Original" panel tilts by this much while it is open. */
-export const revealTilt = -1;
-
-/** Message bubbles lean by this many degrees, alternating side to side. */
-export const bubbleTilt = 1.5;
