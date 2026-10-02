@@ -17,6 +17,7 @@ export interface Database {
           melo_id: string;
           display_name: string;
           reading_language: string;
+          avatar_key: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -25,6 +26,7 @@ export interface Database {
           melo_id: string;
           display_name: string;
           reading_language: string;
+          avatar_key?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -33,6 +35,7 @@ export interface Database {
           melo_id?: string;
           display_name?: string;
           reading_language?: string;
+          avatar_key?: string | null;
           created_at?: string;
           updated_at?: string;
         };

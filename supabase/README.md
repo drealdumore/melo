@@ -84,8 +84,10 @@ time, not read at runtime.
    check.
 3. Create a profile on a second device, then connect the two. A row appears in
    `rooms` whose `id` is `sorted(meloA, meloB).join('-')`.
-4. Send a message. `messages` gains a row with `translation_status = 'pending'`,
-   then flips to `translated` (or `failed`) a moment later.
+4. Send a message. The row is inserted only after translation succeeds, with
+   `translation_status = 'translated'` (or `skipped` when the text already
+   matches the reader's language). Failed translations remain on the sender's
+   device and never appear in `messages`.
 
 ## Phase 10 — before going beyond friends
 

@@ -1,26 +1,19 @@
-/**
- * Step 2: your name screen.
- * Styled to match reference images with rounded input card, character counter,
- * mascot speech bubble, and continue CTA button.
- */
-import { useCallback, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCallback, useState } from "react";
+import { StyleSheet, Text, TextInput, View } from "react-native";
+import { useFocusEffect, useRouter } from "expo-router";
 
-import { Button } from '@/components/ui/Button';
-import { OnboardingScreen } from '@/components/onboarding/OnboardingScreen';
-import { loadDraft, saveDraft } from '@/services/onboardingDraft';
-import { useTheme } from '@/hooks/useTheme';
+import { Button } from "@/components/ui/Button";
+import { OnboardingScreen } from "@/components/onboarding/OnboardingScreen";
+import { loadDraft, saveDraft } from "@/services/onboardingDraft";
+import { useTheme } from "@/hooks/useTheme";
 
 const MAX_NAME_LENGTH = 30;
 
 export default function NameScreen() {
-  const { colors, typography, spacing, isDark } = useTheme();
-  const insets = useSafeAreaInsets();
+  const { colors, typography, isDark } = useTheme();
   const router = useRouter();
 
-  const [name, setName] = useState('');
+  const [name, setName] = useState("");
   const [editingDraft, setEditingDraft] = useState(false);
 
   useFocusEffect(
@@ -33,7 +26,7 @@ export default function NameScreen() {
       return () => {
         cancelled = true;
       };
-    }, [])
+    }, []),
   );
 
   const trimmed = name.trim();
@@ -42,41 +35,45 @@ export default function NameScreen() {
   const onContinue = useCallback(async () => {
     if (!isValid) return;
     await saveDraft({ displayName: trimmed.slice(0, MAX_NAME_LENGTH) });
-    router.push('/onboarding/id');
+    router.push("/onboarding/avatar");
   }, [isValid, router, trimmed]);
 
-  const inputBg = isDark ? 'rgba(255, 255, 255, 0.05)' : colors.surface;
-  const inputBorder = isDark ? 'rgba(255, 255, 255, 0.12)' : colors.border;
+  const inputBg = isDark ? "rgba(255, 255, 255, 0.05)" : colors.surface;
+  const inputBorder = isDark ? "rgba(255, 255, 255, 0.12)" : colors.border;
 
   return (
     <OnboardingScreen
       step={2}
-      title="What should we call you?"
-      subtitle="Just a first name is plenty."
+      eyebrow="Okay, who are you?"
+      title="what do we call you?"
       onBack={() => router.back()}
       avoidKeyboard
-      mascotMessage="no judgment here, everyone starts somewhere."
       footer={
         <Button
-          label="Continue"
+          label="Next"
           onPress={() => void onContinue()}
           disabled={!isValid}
-          icon="arrowRight"
           testID="continue"
         />
       }
       testID="name-screen"
     >
       <View style={styles.field}>
-        <Text style={[typography.label, styles.fieldLabel, { color: colors.textMuted }]}>
-          YOUR NAME
+        <Text
+          style={[
+            typography.label,
+            styles.fieldLabel,
+            { color: colors.textMuted },
+          ]}
+        >
+          Your name
         </Text>
 
         <View
           style={[
             styles.inputContainer,
             {
-              backgroundColor: inputBg,
+              backgroundColor: colors.surface,
               borderColor: inputBorder,
             },
           ]}
@@ -87,7 +84,7 @@ export default function NameScreen() {
               setName(next.slice(0, MAX_NAME_LENGTH));
               setEditingDraft(true);
             }}
-            placeholder="e.g. Alex"
+            placeholder="Your name"
             placeholderTextColor={colors.textMuted}
             autoCapitalize="words"
             autoCorrect={false}
@@ -102,13 +99,20 @@ export default function NameScreen() {
               typography.body,
               {
                 color: colors.textPrimary,
+                backgroundColor: colors.surface,
               },
             ]}
           />
         </View>
 
-        <Text style={[typography.caption, styles.counter, { color: colors.textMuted }]}>
-          {editingDraft || name ? `${trimmed.length}/${MAX_NAME_LENGTH}` : ' '}
+        <Text
+          style={[
+            typography.caption,
+            styles.counter,
+            { color: colors.textMuted },
+          ]}
+        >
+          {editingDraft || name ? `${trimmed.length}/${MAX_NAME_LENGTH}` : " "}
         </Text>
       </View>
     </OnboardingScreen>
@@ -121,11 +125,12 @@ const styles = StyleSheet.create({
   inputContainer: {
     borderWidth: 1.5,
     borderRadius: 20,
+    borderCurve: "continuous",
     paddingHorizontal: 20,
     paddingVertical: 14,
     minHeight: 60,
-    justifyContent: 'center',
-    shadowColor: '#000',
+    justifyContent: "center",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
     shadowRadius: 8,
@@ -136,5 +141,5 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     padding: 0,
   },
-  counter: { textAlign: 'right', marginTop: 4 },
+  counter: { textAlign: "right", marginTop: 4 },
 });

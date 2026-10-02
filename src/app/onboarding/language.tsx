@@ -38,11 +38,12 @@ export default function LanguageScreen() {
   return (
     <OnboardingScreen
       step={1}
-      title="What language feels best for you?"
-      subtitle="You can change this anytime in Settings."
+      eyebrow="Quick setup"
+      title="what language do you think in?"
+      subtitle="change it anytime in your profile."
       onBack={() => router.back()}
-      mascotMessage="first things first — let's make this feel like home."
-      footer={<Button label="Continue" onPress={() => void onContinue()} icon="arrowRight" testID="continue" />}
+      // mascotMessage="first things first — let's make this feel like home."
+      footer={<Button label="Next" onPress={() => void onContinue()} testID="continue" />}
       testID="language-screen"
     >
       <FlatList

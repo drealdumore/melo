@@ -1,6 +1,6 @@
 /**
- * One language in the onboarding picker. Styled to match the pill option cards in the reference images:
- * Rounded card container (20pt radius), flag icon, native + english label, radio check indicator on right.
+ * One language option in the onboarding picker and profile settings.
+ * Styled as a continuous-corner card with flag badge and check indicator.
  */
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -16,21 +16,30 @@ export interface LanguageRowProps {
   showEnglishName?: boolean;
 }
 
-export function LanguageRow({ language, selected, onPress, showEnglishName = true }: LanguageRowProps) {
+export function LanguageRow({
+  language,
+  selected,
+  onPress,
+  showEnglishName = true,
+}: LanguageRowProps) {
   const { colors, typography, isDark } = useTheme();
-  const { onPressIn, onPressOut, style: pressStyle } = usePressable();
+  const { onPressIn, onPressOut, style: pressStyle } = usePressable({ scale: 0.98 });
 
   const cardBg = selected
     ? isDark
-      ? 'rgba(255, 125, 99, 0.14)'
-      : 'rgba(255, 106, 77, 0.08)'
+      ? 'rgba(255, 138, 43, 0.10)'
+      : 'rgba(255, 138, 43, 0.08)'
+    : isDark
+    ? 'rgba(255, 255, 255, 0.05)'
     : colors.surface;
 
   const borderColor = selected
     ? colors.accent
     : isDark
-    ? 'rgba(255, 255, 255, 0.08)'
-    : 'rgba(0, 0, 0, 0.04)';
+    ? 'rgba(255, 255, 255, 0.10)'
+    : colors.border;
+
+  const flagBadgeBg = isDark ? 'rgba(255, 255, 255, 0.08)' : '#F2EFEA';
 
   return (
     <AnimatedPressable
@@ -44,15 +53,20 @@ export function LanguageRow({ language, selected, onPress, showEnglishName = tru
       style={[
         styles.row,
         {
-          backgroundColor: cardBg,
-          borderColor,
-          borderWidth: selected ? 2 : 1,
+          backgroundColor: colors.surface,
+          borderColor: selected ? colors.accent : colors.border,
+          borderWidth: selected ? 1 : 0.5,
+          elevation: selected ? 3 : 0,
         },
         pressStyle,
       ]}
     >
-      <View style={[styles.flagBadge, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#F2EFEA' }]}>
-        <Text style={styles.flag} accessibilityElementsHidden importantForAccessibility="no">
+      <View style={[styles.flagBadge, { backgroundColor: flagBadgeBg }]}>
+        <Text
+          style={styles.flag}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        >
           {language.flag}
         </Text>
       </View>
@@ -70,7 +84,10 @@ export function LanguageRow({ language, selected, onPress, showEnglishName = tru
           {language.nativeName}
         </Text>
         {showEnglishName && language.nativeName !== language.name ? (
-          <Text numberOfLines={1} style={[typography.caption, { color: colors.textMuted }]}>
+          <Text
+            numberOfLines={1}
+            style={[typography.caption, { color: colors.textMuted }]}
+          >
             {language.name}
           </Text>
         ) : null}
@@ -81,11 +98,17 @@ export function LanguageRow({ language, selected, onPress, showEnglishName = tru
           styles.checkCircle,
           {
             backgroundColor: selected ? colors.accent : 'transparent',
-            borderColor: selected ? colors.accent : isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)',
+            borderColor: selected
+              ? colors.accent
+              : isDark
+              ? 'rgba(255, 255, 255, 0.25)'
+              : 'rgba(0, 0, 0, 0.18)',
           },
         ]}
       >
-        {selected ? <Icon name="check" size={14} color={colors.onAccent} strokeWidth={3} /> : null}
+        {selected ? (
+          <Icon name="check" size={14} color="#FFFFFF" strokeWidth={3} />
+        ) : null}
       </View>
     </AnimatedPressable>
   );
@@ -99,6 +122,7 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     minHeight: 64,
     borderRadius: 20,
+    borderCurve: 'continuous',
     gap: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
@@ -107,15 +131,16 @@ const styles = StyleSheet.create({
     elevation: 1,
   },
   flagBadge: {
-    width: 40,
-    height: 40,
+    width: 42,
+    height: 42,
     borderRadius: 12,
+    borderCurve: 'continuous',
     alignItems: 'center',
     justifyContent: 'center',
   },
   flag: { fontSize: 22 },
   labels: { flex: 1, gap: 2 },
-  nativeName: { fontSize: 16 },
+  nativeName: { fontSize: 16, letterSpacing: -0.2 },
   rtl: { textAlign: 'right', writingDirection: 'rtl' },
   checkCircle: {
     width: 24,

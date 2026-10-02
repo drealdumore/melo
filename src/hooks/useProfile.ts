@@ -12,15 +12,23 @@ export interface ProfileContextValue {
   profile: Profile | null;
   /** True until we have read AsyncStorage. */
   loading: boolean;
+  /** True after the user confirms the final onboarding step. */
+  onboardingComplete: boolean;
   /** True once we know for certain there is no profile, i.e. show onboarding. */
   needsOnboarding: boolean;
   /** Writes the profile row for an identity that was already drawn and shown. */
   create: (
     identity: LocalIdentity,
-    input: { displayName: string; readingLanguage: string }
+    input: { displayName: string; readingLanguage: string; avatarKey?: string | null }
   ) => Promise<Profile>;
-  update: (changes: { displayName?: string; readingLanguage?: string }) => Promise<Profile>;
+  /** Marks onboarding complete after the user confirms their Melo ID. */
+  completeOnboarding: () => Promise<void>;
+  update: (
+    changes: { displayName?: string; readingLanguage?: string; avatarKey?: string | null }
+  ) => Promise<Profile>;
   reload: () => Promise<void>;
+  /** Wipes the local identity and profile, sending the user back to onboarding. */
+  reset: () => Promise<void>;
 }
 
 export const ProfileContext = createContext<ProfileContextValue | null>(null);

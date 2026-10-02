@@ -1,14 +1,13 @@
 /**
  * Segmented Onboarding Progress Bar.
- * Renders discrete pill segments (e.g. 3 segments for 3 steps), matching the exact header design
- * in the reference images.
+ * Renders discrete pill segments matching the onboarding step count.
  */
 import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, {
+  Easing,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 
@@ -24,24 +23,35 @@ export interface ProgressBarProps {
 function SegmentItem({
   index,
   activeRatio,
+  activeIndex,
   isDark,
 }: {
   index: number;
   activeRatio: number;
+  activeIndex: number;
   isDark: boolean;
 }) {
   const { colors, radii } = useTheme();
   const reduced = useReducedMotion();
-  const filled = useSharedValue(0);
+  const filled = useSharedValue(index < activeIndex ? 1 : 0);
 
-  // Target fill for this specific segment index (0, 1, 2...)
   const targetFill = Math.max(0, Math.min(1, activeRatio - index));
 
   useEffect(() => {
-    filled.value = reduced
-      ? withTiming(targetFill, { duration: 180 })
-      : withSpring(targetFill, { damping: 22, stiffness: 180 });
-  }, [targetFill, reduced, filled]);
+    if (index < activeIndex) {
+      filled.value = 1;
+      return;
+    }
+    if (index > activeIndex) {
+      filled.value = 0;
+      return;
+    }
+
+    filled.value = withTiming(targetFill, {
+      duration: reduced ? 140 : 180,
+      easing: Easing.out(Easing.quad),
+    });
+  }, [activeIndex, filled, index, reduced, targetFill]);
 
   const fillStyle = useAnimatedStyle(() => ({
     width: `${filled.value * 100}%`,
@@ -66,6 +76,7 @@ function SegmentItem({
 export function ProgressBar({ progress, totalSteps = 3 }: ProgressBarProps) {
   const { isDark } = useTheme();
   const activeRatio = progress * totalSteps;
+  const activeIndex = Math.min(totalSteps - 1, Math.max(0, Math.ceil(activeRatio) - 1));
 
   return (
     <View
@@ -78,6 +89,7 @@ export function ProgressBar({ progress, totalSteps = 3 }: ProgressBarProps) {
           key={index}
           index={index}
           activeRatio={activeRatio}
+          activeIndex={activeIndex}
           isDark={isDark}
         />
       ))}

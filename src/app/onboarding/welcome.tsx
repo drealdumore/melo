@@ -1,61 +1,48 @@
-import { useEffect } from "react";
 import { StyleSheet, Text, View, Image } from "react-native";
 import { useRouter } from "expo-router";
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-  FadeIn,
-  FadeInUp,
-} from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Animated from "react-native-reanimated";
 
 import { useTheme } from "@/hooks/useTheme";
+import { useScreenInsets } from "@/hooks/useScreenInsets";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { Button } from "@/components/ui/Button";
-import { AmbientGlow } from "@/components/ui/AmbientGlow";
+import { screenEnter, screenFadeEnter } from "@/theme/motion";
+
+const WELCOME_MARK_ENTER = screenEnter();
+const WELCOME_MARK_REDUCED_ENTER = screenFadeEnter();
+const WELCOME_COPY_ENTER = screenEnter(60);
+const WELCOME_COPY_REDUCED_ENTER = screenFadeEnter(60);
+const WELCOME_FOOTER_ENTER = screenEnter(120);
+const WELCOME_FOOTER_REDUCED_ENTER = screenFadeEnter(120);
 
 export default function WelcomeScreen() {
-  const { colors, typography, screenPadding, duration, isDark } = useTheme();
-  const insets = useSafeAreaInsets();
+  const { colors, typography, screenPadding, spacing, isDark } = useTheme();
+  const { headerTop, footerBottom } = useScreenInsets();
   const router = useRouter();
   const reduced = useReducedMotion();
-
-  const progress = useSharedValue(0);
-
-  useEffect(() => {
-    progress.value = withTiming(1, { duration: duration.slow });
-  }, [duration.slow, progress]);
-
-  const markStyle = useAnimatedStyle(() =>
-    reduced
-      ? { opacity: progress.value }
-      : {
-          opacity: progress.value,
-          transform: [{ scale: 0.88 + progress.value * 0.12 }],
-        },
-  );
 
   const heroCardBorder = isDark
     ? "rgba(255, 255, 255, 0.08)"
     : "rgba(0, 0, 0, 0.05)";
 
   return (
-    <View style={styles.root}>
-      <AmbientGlow />
+    <View style={[styles.root, { backgroundColor: colors.background }]}>
 
       <View
         style={[
           styles.container,
           {
-            paddingTop: insets.top + 48,
-            paddingBottom: Math.max(insets.bottom, 20) + 12,
+            paddingTop: headerTop + spacing.xxxl,
+            paddingBottom: footerBottom + spacing.xs,
             paddingHorizontal: screenPadding,
           },
         ]}
       >
         <View style={styles.center}>
-          <Animated.View style={[markStyle, styles.badgeWrapper]}>
+          <Animated.View
+            entering={reduced ? WELCOME_MARK_REDUCED_ENTER : WELCOME_MARK_ENTER}
+            style={styles.badgeWrapper}
+          >
             <View
               style={[
                 styles.markBadge,
@@ -73,7 +60,7 @@ export default function WelcomeScreen() {
           </Animated.View>
 
           <Animated.View
-            entering={FadeInUp.delay(120).duration(400)}
+            entering={reduced ? WELCOME_COPY_REDUCED_ENTER : WELCOME_COPY_ENTER}
             style={styles.copy}
           >
             <Text
@@ -84,7 +71,7 @@ export default function WelcomeScreen() {
                 { color: colors.textPrimary },
               ]}
             >
-              Walk with Melo
+              Say it your way.{"\n"}They get it in theirs.
             </Text>
             <Text
               style={[
@@ -93,19 +80,26 @@ export default function WelcomeScreen() {
                 { color: colors.textMuted },
               ]}
             >
-              Say it your way. Real-time translation, effortless connection.
+              You type in your language. they read it in theirs. 
             </Text>
           </Animated.View>
         </View>
 
         <Animated.View
-          entering={FadeIn.delay(240).duration(300)}
+          entering={reduced ? WELCOME_FOOTER_REDUCED_ENTER : WELCOME_FOOTER_ENTER}
           style={styles.footer}
         >
           <Button
-            label="Get started"
+            label="Let’s go"
             onPress={() => router.push("/onboarding/language")}
             testID="get-started"
+          />
+
+          <Button
+            label="I have a melo id"
+            onPress={() => router.push("/onboarding/recover")}
+            variant="ghost"
+            testID="recover"
           />
         </Animated.View>
       </View>
@@ -130,6 +124,7 @@ const styles = StyleSheet.create({
     resizeMode: "contain",
   },
   copy: { alignItems: "center", marginTop: 24, paddingHorizontal: 16 },
+  eyebrow: { textAlign: "center", letterSpacing: 0.8, marginBottom: 8 },
   titleText: {
     fontSize: 36,
     lineHeight: 44,
