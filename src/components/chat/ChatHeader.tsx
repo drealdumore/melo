@@ -8,6 +8,10 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Animated, {
+  Easing,
+  FadeIn,
+  FadeOut,
+  LinearTransition,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -22,6 +26,8 @@ import { IconButton } from '@/components/ui/IconButton';
 import { AnimatedPressable, usePressable } from '@/hooks/usePressable';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { duration, spring } from '@/theme/motion';
+
+const PRESENCE_LAYOUT = LinearTransition.duration(220).easing(Easing.out(Easing.cubic));
 
 export interface ChatHeaderProps {
   name: string;
@@ -64,9 +70,11 @@ export function ChatHeader({
 
   const subtitle = online
     ? elsewhere
-      ? 'In Melo'
-      : 'Here now'
-    : `Reads in ${languageName(readingLanguage)}`;
+      ? 'Online · In Melo'
+      : 'Online · Here now'
+    : presenceLive
+      ? `Offline · Reads in ${languageName(readingLanguage)}`
+      : `Status unavailable · Reads in ${languageName(readingLanguage)}`;
 
   const hintContainerStyle = useAnimatedStyle(() => ({
     height: hintH.value,
@@ -156,6 +164,7 @@ function NameCenterButton({
   onPress: () => void;
 }) {
   const { colors, typography } = useTheme();
+  const reduced = useReducedMotion();
   const { onPressIn, onPressOut, style } = usePressable();
 
   return (
@@ -164,25 +173,37 @@ function NameCenterButton({
       onPressIn={onPressIn}
       onPressOut={onPressOut}
       accessibilityRole="button"
-      accessibilityLabel={`${name}'s profile`}
+      accessibilityLabel={`${name}, ${subtitle}`}
       testID="chat-name"
       style={[styles.centerContainer, style]}
     >
-      <Avatar
-        name={name}
-        avatarKey={avatarKey}
-        size={42}
-        presence={online ? 'online' : 'offline'}
-        idle={elsewhere && online}
-      />
-      <View style={styles.centerText}>
-        <Text numberOfLines={1} style={[typography.bodyStrong, styles.nameText, { color: colors.textPrimary }]}>
-          {name}
-        </Text>
-        <Text numberOfLines={1} style={[typography.caption, { color: colors.textMuted }]}>
-          {subtitle}
-        </Text>
-      </View>
+      <Animated.View
+        layout={reduced ? undefined : PRESENCE_LAYOUT}
+        style={styles.nameGroup}
+      >
+        <Avatar
+          name={name}
+          avatarKey={avatarKey}
+          size={42}
+          presence={online ? 'online' : 'offline'}
+          idle={elsewhere && online}
+          animateRing
+        />
+        <View style={styles.centerText}>
+          <Text numberOfLines={1} style={[typography.bodyStrong, styles.nameText, { color: colors.textPrimary }]}>
+            {name}
+          </Text>
+          <Animated.Text
+            key={subtitle}
+            entering={FadeIn.duration(reduced ? 120 : 180)}
+            exiting={FadeOut.duration(reduced ? 100 : 140)}
+            numberOfLines={1}
+            style={[typography.caption, { color: colors.textMuted }]}
+          >
+            {subtitle}
+          </Animated.Text>
+        </View>
+      </Animated.View>
     </AnimatedPressable>
   );
 }
@@ -229,6 +250,7 @@ function LanguagePill({
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 10 },
   centerContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 8 },
+  nameGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   centerText: { alignItems: 'flex-start' },
   nameText: { fontSize: 16 },
   trailing: { alignItems: 'flex-end' },

@@ -42,4 +42,5 @@ export interface ChatParticipant {
 /** Result of the Connect screen's "Start Chat" action. */
 export type ConnectResult =
   | { ok: true; roomId: string }
-  | { ok: false; reason: 'not_found' | 'self' | 'unknown' };
+  | { ok: false; reason: 'not_found' | 'self' }
+  | { ok: false; reason: 'unknown'; error: unknown };

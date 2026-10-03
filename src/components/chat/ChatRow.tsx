@@ -56,7 +56,7 @@ function ChatRowComponent({ chat, myId, online, onPress }: ChatRowProps) {
       style={[
         styles.row,
         {
-          backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : colors.surface,
+          backgroundColor: colors.surface,
           borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : colors.border,
           borderWidth: 1,
           borderRadius: radii.row,
@@ -73,6 +73,7 @@ function ChatRowComponent({ chat, myId, online, onPress }: ChatRowProps) {
         avatarKey={friend.avatar_key}
         size={50}
         presence={online ? 'online' : 'offline'}
+        animateRing
       />
 
       <View style={styles.body}>
@@ -105,6 +106,12 @@ function ChatRowComponent({ chat, myId, online, onPress }: ChatRowProps) {
           >
             {preview}
           </Text>
+          {online ? (
+            <View style={styles.onlineLabel} accessibilityElementsHidden importantForAccessibility="no">
+              <View style={[styles.onlineDot, { backgroundColor: colors.success }]} />
+              <Text style={[typography.caption, { color: colors.success }]}>Online</Text>
+            </View>
+          ) : null}
         </View>
       </View>
     </AnimatedPressable>
@@ -165,5 +172,7 @@ const styles = StyleSheet.create({
   time: { fontVariant: ['tabular-nums'], fontSize: 12 },
   bottomLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   preview: { flex: 1, fontSize: 14, lineHeight: 18 },
+  onlineLabel: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  onlineDot: { width: 6, height: 6, borderRadius: 3 },
   dot: { width: 8, height: 8, borderRadius: 4 },
 });

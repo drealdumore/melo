@@ -21,6 +21,7 @@ import {
 import { AppState, type AppStateStatus } from 'react-native';
 
 import {
+  scheduleRetry,
   subscribeToAppPresence,
   type AppPresenceEntry,
   type AppPresenceSubscription,
@@ -56,44 +57,100 @@ export function AppPresenceProvider({ children }: { children: ReactNode }) {
   // Kept in a ref so `setActiveRoom` is stable and screens can call it from an
   // effect without re-subscribing.
   const activeRoomRef = useRef<string | null>(null);
+  const appIsActiveRef = useRef(AppState.currentState === 'active');
   const subscriptionRef = useRef<AppPresenceSubscription | null>(null);
+  const retryAttemptRef = useRef(0);
+  const cancelRetryRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!meId) return;
 
-    const subscription = subscribeToAppPresence(meId, {
-      onPresenceChange: (next) => {
-        const byId: Record<string, AppPresenceEntry> = {};
-        // We are not interested in advertising ourselves back to ourselves.
-        for (const entry of next) {
-          if (entry.userId !== meId) byId[entry.userId] = entry;
-        }
-        setEntries(byId);
-      },
-      onStatusChange: (status: ChannelStatus) => {
-        setLive(status === 'subscribed');
-        if (status !== 'subscribed') {
-          // Every ring in the app is about to fall back to "offline", which is
-          // indistinguishable from a friend who actually left.
-          log.warn(`app presence is ${status}; online rings are now guesses`);
-        }
-      },
-    });
-    subscriptionRef.current = subscription;
+    let cancelled = false;
+    let generation = 0;
+    let currentSubscription: AppPresenceSubscription | null = null;
+
+    const connect = () => {
+      if (cancelled) return;
+      const connection = ++generation;
+
+      try {
+        const subscription = subscribeToAppPresence(meId, {
+          onPresenceChange: (next) => {
+            if (cancelled || connection !== generation) return;
+            const byId: Record<string, AppPresenceEntry> = {};
+            // We are not interested in advertising ourselves back to ourselves.
+            for (const entry of next) {
+              if (entry.userId !== meId) byId[entry.userId] = entry;
+            }
+            setEntries(byId);
+          },
+          onStatusChange: (status: ChannelStatus) => {
+            if (cancelled || connection !== generation) return;
+            setLive(status === 'subscribed');
+            if (status === 'subscribed') {
+              retryAttemptRef.current = 0;
+              cancelRetryRef.current?.();
+              cancelRetryRef.current = null;
+              return;
+            }
+
+            if (status === 'reconnecting') {
+              log.warn(`app presence is ${status}; online rings may be temporarily unavailable`);
+              const attempt = retryAttemptRef.current++;
+              cancelRetryRef.current?.();
+              const retryGeneration = ++generation;
+              cancelRetryRef.current = scheduleRetry(attempt, () => {
+                if (cancelled || retryGeneration !== generation) return;
+                const previous = currentSubscription;
+                currentSubscription = null;
+                subscriptionRef.current = null;
+                void (async () => {
+                  if (previous) {
+                    try {
+                      await previous.unsubscribe();
+                    } catch (error) {
+                      log.error('could not close the failed app presence channel', undefined, error);
+                    }
+                  }
+                  if (!cancelled && retryGeneration === generation) connect();
+                })();
+              });
+            }
+          },
+        }, () => appIsActiveRef.current, activeRoomRef.current);
+        currentSubscription = subscription;
+        subscriptionRef.current = subscription;
+      } catch (error) {
+        setLive(false);
+        log.error('could not open the app presence channel', undefined, error);
+      }
+    };
+
+    connect();
 
     return () => {
+      cancelled = true;
+      generation += 1;
+      cancelRetryRef.current?.();
+      cancelRetryRef.current = null;
+      retryAttemptRef.current = 0;
+      const subscription = currentSubscription;
+      currentSubscription = null;
       subscriptionRef.current = null;
-      void subscription.unsubscribe();
+      if (subscription) {
+        void subscription.unsubscribe().catch((error: unknown) => {
+          log.error('could not close the app presence channel', undefined, error);
+        });
+      }
     };
   }, [meId]);
 
-  // Foreground only. Backgrounding untracks, so a backgrounded device reads as
-  // offline to the friend rather than as a stale "Online".
+  // Use the ref so a recovered channel, not the original one, receives lifecycle updates.
   useEffect(() => {
-    const subscription = subscriptionRef.current;
-    if (!subscription) return;
-
     const handle = (state: AppStateStatus) => {
+      appIsActiveRef.current = state === 'active';
+      const subscription = subscriptionRef.current;
+      if (!subscription) return;
       if (state === 'active') {
         log.debug('foreground: re-advertising presence');
         subscription.update(activeRoomRef.current);

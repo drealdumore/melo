@@ -134,7 +134,7 @@ export async function connectWithMeloId(me: Profile, rawMeloId: string): Promise
     return { ok: true, roomId: room.id };
   } catch (error) {
     log.error(`connect failed: ${meloId} hit an unexpected error`, error);
-    return { ok: false, reason: 'unknown' };
+    return { ok: false, reason: 'unknown', error };
   }
 }
 

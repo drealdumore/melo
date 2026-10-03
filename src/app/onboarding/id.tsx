@@ -14,6 +14,7 @@ import {
 } from "@/services/profile";
 import { loadDraft } from "@/services/onboardingDraft";
 import { createLogger } from "@/services/logger";
+import { formatServiceError } from "@/utils/serviceError";
 
 const log = createLogger("onboarding.id");
 
@@ -22,6 +23,14 @@ type SaveState =
   | { status: "saving"; identity: LocalIdentity }
   | { status: "ready"; identity: LocalIdentity }
   | { status: "failed"; identity: LocalIdentity; message: string };
+
+function getProfileSaveErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.name === "MeloIdTakenError") {
+    return "Couldn't find a free ID. Please try again.";
+  }
+
+  return formatServiceError(error, "Profile save failed");
+}
 
 export default function MeloIdScreen() {
   const { colors, typography, isDark, fontFamily } = useTheme();
@@ -75,24 +84,19 @@ export default function MeloIdScreen() {
           );
         }
       } catch (error) {
+        const message = getProfileSaveErrorMessage(error);
         log.error(
           "the profile could not be created",
           {
             meloId: identity.meloId,
-            shown:
-              error instanceof Error && error.name === "MeloIdTakenError"
-                ? "couldn't find a free id. try again."
-                : "something went wrong. try again",
+            shown: message,
           },
           error,
         );
         setState({
           status: "failed",
           identity,
-          message:
-            error instanceof Error && error.name === "MeloIdTakenError"
-              ? "couldn't find a free id. try again."
-              : "Something went wrong. Try again.",
+          message,
         });
       }
     },

@@ -15,6 +15,7 @@ import {
   type RecoverResult,
 } from "@/services/profile";
 import { createLogger } from "@/services/logger";
+import { formatServiceError } from "@/utils/serviceError";
 
 const log = createLogger("onboarding.recover");
 
@@ -27,6 +28,10 @@ const MESSAGES: Record<Failure, string> = {
   lookup_failed: "can't connect. check your wifi or data and try again.",
   completion_failed: "your account was recovered, but setup couldn't be finished. please try again.",
 };
+
+function getLookupErrorDetails(error: unknown): string {
+  return formatServiceError(error, "Supabase lookup failed");
+}
 
 export default function RecoverScreen() {
   const {
@@ -43,17 +48,20 @@ export default function RecoverScreen() {
 
   const [value, setValue] = useState("");
   const [failure, setFailure] = useState<Failure | null>(null);
+  const [lookupErrorDetails, setLookupErrorDetails] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const onChange = useCallback((next: string) => {
     setValue(normalizeMeloId(next).slice(0, MELO_ID_MAX_LENGTH));
     setFailure(null);
+    setLookupErrorDetails(null);
   }, []);
 
   const onSubmit = useCallback(async () => {
     if (busy) return;
     setBusy(true);
     setFailure(null);
+    setLookupErrorDetails(null);
     try {
       const result = await recoverIdentity(value);
       if (!result.ok) {
@@ -81,6 +89,7 @@ export default function RecoverScreen() {
       // from "no such account" and worth its own message and its own log line.
       log.error(`the lookup for ${value} threw`, error);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setLookupErrorDetails(getLookupErrorDetails(error));
       setFailure("lookup_failed");
     } finally {
       setBusy(false);
@@ -172,6 +181,9 @@ export default function RecoverScreen() {
               testID="recover-error"
             >
               {MESSAGES[failure]}
+              {failure === "lookup_failed" && lookupErrorDetails
+                ? ` (${lookupErrorDetails})`
+                : ""}
             </Text>
           ) : null}
 

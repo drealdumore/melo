@@ -4,8 +4,9 @@
  * One channel per room, `room:{roomId}`, carrying three things:
  *   1. `postgres_changes` on `messages` (INSERT + UPDATE) — new messages,
  *      completed translations, and delivered/read all arrive through here.
- *   2. Presence keyed by user UUID. The friend is online when their UUID is in
- *      the presence state. Tracked on subscribe and on AppState changes.
+ *   2. Presence payloads include the user UUID. Realtime state is keyed by
+ *      connection, so the friend is online when their UUID appears in a payload.
+ *      Tracked on subscribe and on AppState changes.
  *   3. Broadcast `typing`, which is never written to the database.
  *
  * Lifecycle is owned by the caller: subscribe on focus, unsubscribe on blur and
@@ -51,6 +52,26 @@ const TYPING_THROTTLE_MS = 2000;
 
 function channelName(roomId: string): string {
   return `room:${roomId}`;
+}
+
+function readRoomPresenceIds(channel: RealtimeChannel): string[] {
+  const state = channel.presenceState<Record<string, unknown[]>>();
+  const ids = new Set<string>();
+
+  for (const [key, presences] of Object.entries(state)) {
+    for (const presence of presences) {
+      const userId =
+        typeof presence === 'object' &&
+        presence !== null &&
+        'userId' in presence &&
+        typeof presence.userId === 'string'
+          ? presence.userId
+          : key;
+      ids.add(userId);
+    }
+  }
+
+  return [...ids];
 }
 
 /**
@@ -103,18 +124,17 @@ export function subscribeToRoom(
       onChange('UPDATE')
     )
     .on(PRESENCE_EVENT, { event: 'sync' }, () => {
-      const state = channel.presenceState<Record<string, unknown[]>>();
-      const ids = Object.keys(state);
+      const ids = readRoomPresenceIds(channel);
       log.debug(`presence sync on ${name}: ${ids.length} online`, { meOnline: ids.includes(meId) });
       handlers.onPresenceChange?.(ids);
     })
     .on(PRESENCE_EVENT, { event: 'join' }, () => {
-      const ids = Object.keys(channel.presenceState());
+      const ids = readRoomPresenceIds(channel);
       log.debug(`presence join on ${name}: ${ids.length} online`);
       handlers.onPresenceChange?.(ids);
     })
     .on(PRESENCE_EVENT, { event: 'leave' }, () => {
-      const ids = Object.keys(channel.presenceState());
+      const ids = readRoomPresenceIds(channel);
       log.debug(`presence leave on ${name}: ${ids.length} still online`);
       handlers.onPresenceChange?.(ids);
     })
@@ -250,9 +270,9 @@ export function backoffFor(attempt: number): number {
  * would report them offline; and a friend in *this* chat needs a different ring
  * from a friend somewhere else in the app.
  *
- * So there is one shared channel, `app:presence`, keyed by user UUID, whose
- * payload also says which room that user currently has open. Combined with room
- * presence it gives the full picture:
+ * So there is one shared channel, `app:presence`, whose payload includes the
+ * user UUID and the room they currently have open. Combined with room presence
+ * it gives the full picture:
  *
  *   in this room              → solid `success` ring
  *   in the app, another room  → dashed muted ring
@@ -289,7 +309,7 @@ function readAppPresence(channel: RealtimeChannel): AppPresenceEntry[] {
   const state = channel.presenceState() as unknown as Record<string, Partial<AppPresenceEntry>[]>;
   const entries: AppPresenceEntry[] = [];
   for (const [key, rows] of Object.entries(state)) {
-    // A key is the tracked userId; the row carries the room they are in.
+    // Supabase keys state by connection; the payload identifies the user.
     const row = rows[rows.length - 1];
     entries.push({
       userId: row?.userId ?? key,
@@ -302,15 +322,31 @@ function readAppPresence(channel: RealtimeChannel): AppPresenceEntry[] {
 
 export function subscribeToAppPresence(
   meId: string,
-  handlers: AppPresenceHandlers
+  handlers: AppPresenceHandlers,
+  isForeground: () => boolean,
+  initialRoomId: string | null
 ): AppPresenceSubscription {
   const client: SupabaseClient = requireSupabase();
   const channel = client.channel(APP_PRESENCE_CHANNEL);
+  let activeRoomId = initialRoomId;
+  let channelSubscribed = false;
   log.debug(`subscribing to ${APP_PRESENCE_CHANNEL} as ${meId.slice(0, 8)}`);
 
   const publish = (roomId: string | null) => {
+    activeRoomId = roomId;
     log.debug(`advertising presence: room ${roomId ?? 'none'}`);
-    void channel.track({ userId: meId, roomId, at: new Date().toISOString() });
+    if (!channelSubscribed || !isForeground()) return;
+
+    void channel
+      .track({ userId: meId, roomId, at: new Date().toISOString() })
+      .then((status) => {
+        if (status !== 'ok') {
+          log.warn(`presence track returned ${status} for ${APP_PRESENCE_CHANNEL}`);
+        }
+      })
+      .catch((error: unknown) => {
+        log.error(`could not publish presence on ${APP_PRESENCE_CHANNEL}`, error);
+      });
   };
 
   const emit = () => {
@@ -328,17 +364,20 @@ export function subscribeToAppPresence(
     .subscribe((status) => {
       switch (status) {
         case 'SUBSCRIBED':
+          channelSubscribed = true;
           handlers.onStatusChange?.('subscribed');
-          publish(null);
+          publish(activeRoomId);
           log.info(`${APP_PRESENCE_CHANNEL} is live`);
           break;
         case 'CHANNEL_ERROR':
         case 'TIMED_OUT':
         case 'CLOSED':
+          channelSubscribed = false;
           handlers.onStatusChange?.('reconnecting');
           log.warn(`${APP_PRESENCE_CHANNEL} hit ${status}; online rings will be wrong`);
           break;
         default:
+          channelSubscribed = false;
           handlers.onStatusChange?.('connecting');
           log.debug(`${APP_PRESENCE_CHANNEL} is ${status}`);
       }

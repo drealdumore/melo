@@ -106,8 +106,10 @@ suffix. It is used to find friends, not as a secure authentication credential.
 Onboarding collects a reading language, name, and optional avatar before saving
 the profile. The ID screen then shows the generated ID; tapping **Next** marks
 setup complete and opens Chats. A saved onboarding draft preserves the answers
-if setup is interrupted. The recovery flow can restore a profile when the user
-provides its Melo ID.
+if setup is interrupted. Production onboarding requires a confirmed Supabase
+save. If an older build left a device-only profile, the app attempts to restore
+it to Supabase on the next launch after the backend is configured. The recovery
+flow can restore a profile when the user provides its Melo ID.
 
 ### Chats and messages
 

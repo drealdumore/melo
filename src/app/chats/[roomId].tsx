@@ -33,7 +33,7 @@ export default function ChatScreen() {
   const insets = useScreenInsets();
   const isFocused = useIsFocused();
   const { profile } = useProfile();
-  const { presenceOf, isInRoom, setActiveRoom } = useAppPresence();
+  const { presenceOf, isInRoom, live: appPresenceLive, setActiveRoom } = useAppPresence();
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const {
@@ -70,9 +70,16 @@ export default function ChatScreen() {
   if (notFound) return <MissingRoom message="This conversation is no longer available." />;
 
   const reconnecting = connection === 'reconnecting' || connection === 'connecting';
-  // Room presence is authoritative for "here now"; app presence fills in the
-  // "in Melo, but not in this chat" case that room presence cannot see.
-  const elsewhere = friend ? presenceOf(friend.id) === 'online' && !isInRoom(friend.id, roomId) : false;
+  // App presence covers friends who are active outside this room; room presence
+  // still confirms "here now" if the app-wide channel is catching up.
+  const appOnline = friend ? presenceOf(friend.id) === 'online' : false;
+  const roomOnline = Boolean(friend && presenceLive && presence === 'online');
+  const friendOnline = appOnline || roomOnline;
+  // A connected room channel can confirm the friend is here, but can't prove
+  // they are offline elsewhere. Only app presence makes an offline answer global.
+  const friendPresenceLive = appPresenceLive || roomOnline;
+  const displayedPresence = friendOnline ? 'online' : 'offline';
+  const elsewhere = appOnline && !isInRoom(friend?.id ?? '', roomId);
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
@@ -85,8 +92,8 @@ export default function ChatScreen() {
           avatarKey={friend?.avatar_key}
           readingLanguage={friend?.reading_language ?? profile?.reading_language ?? 'en'}
           myLanguage={profile?.reading_language ?? 'en'}
-          presence={presence}
-          presenceLive={presenceLive}
+          presence={displayedPresence}
+          presenceLive={friendPresenceLive}
           elsewhere={elsewhere}
           onBack={() => (router.canGoBack() ? router.back() : router.replace('/chats'))}
           onPressName={friend ? openFriend : () => {}}
@@ -136,8 +143,8 @@ export default function ChatScreen() {
         visible={sheetOpen}
         friend={friend}
         myLanguage={profile?.reading_language ?? 'en'}
-        presence={presence}
-        presenceLive={presenceLive}
+        presence={displayedPresence}
+        presenceLive={friendPresenceLive}
         elsewhere={elsewhere}
         onClose={closeFriend}
       />

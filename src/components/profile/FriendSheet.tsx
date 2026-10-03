@@ -76,12 +76,12 @@ function FriendSheetBody({
   const sameLanguage = friend.reading_language === myLanguage;
 
   const presenceLabel = !presenceLive
-    ? 'Away'
+    ? 'Status unavailable'
     : online
     ? elsewhere
-      ? 'In Melo'
-      : 'In your circle'
-    : 'Away';
+      ? 'Online · In Melo'
+      : 'Online · In this chat'
+    : 'Offline';
 
   return (
     <Sheet visible={visible} title={friend.display_name} onClose={onClose}>
@@ -95,6 +95,7 @@ function FriendSheetBody({
               size={82}
               presence={online ? 'online' : 'offline'}
               idle={elsewhere && online}
+              animateRing={visible}
             />
             <Text style={[typography.section, { color: colors.textPrimary, marginTop: 10 }]}>
               {friend.display_name}
@@ -172,7 +173,7 @@ function FriendSheetBody({
                   friend.reading_language
                 )}.\n${friend.display_name} writes in ${languageName(friend.reading_language)}. You read it in ${languageName(
                   myLanguage
-                )}.\nAutomatic and instant.`}
+                )}.`}
           </Text>
         </View>
       </SheetScroll>

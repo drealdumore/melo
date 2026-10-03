@@ -149,7 +149,10 @@ export function Sheet({ visible, onClose, title, children, dismissable = true }:
   );
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents={visible ? 'auto' : 'none'}>
+    <View
+      style={[StyleSheet.absoluteFill, styles.overlay]}
+      pointerEvents={visible ? 'auto' : 'none'}
+    >
       <GestureDetector gesture={backdropTap}>
         <Animated.View style={[styles.backdrop, backdropStyle]} />
       </GestureDetector>
@@ -261,6 +264,10 @@ export function SheetScroll({ children }: { children: React.ReactNode }) {
 }
 
 const styles = StyleSheet.create({
+  overlay: {
+    zIndex: 100,
+    elevation: 100,
+  },
   backdrop: {
     position: 'absolute',
     top: 0,

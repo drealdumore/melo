@@ -8,7 +8,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 
-import { requireSupabase, isSupabaseConfigured } from '@/services/supabase';
+import {
+  isSupabaseConfigured,
+  requireSupabase,
+  SupabaseNotConfiguredError,
+} from '@/services/supabase';
 import { isAvatarKey } from '@/constants/avatars';
 import { createLogger } from '@/services/logger';
 import type { Profile } from '@/types/models';
@@ -318,6 +322,8 @@ export async function createProfile(
   };
 
   if (!isSupabaseConfigured) {
+    if (!__DEV__) throw new SupabaseNotConfiguredError();
+
     // Offline/dev fallback so the flow is still explorable without a backend.
     // This looks identical to a real signup from the outside, which is exactly
     // why it is a warn: the ID the user is about to share resolves to nothing.

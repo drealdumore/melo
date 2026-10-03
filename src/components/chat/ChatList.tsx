@@ -145,7 +145,6 @@ export function ChatList({
           <Animated.View
             entering={FadeIn.duration(180)}
             exiting={FadeOut.duration(140)}
-            // A layout change, not a transform, would move the list under the user.
             style={[styles.typing, UNFLIP, friendIsTyping ? null : styles.hidden]}
             pointerEvents="none"
           >
@@ -158,11 +157,9 @@ export function ChatList({
   );
 }
 
-/** Three ghost bubbles: one in, two out. Says "loading" without a spinner. */
 export function ChatListSkeleton({ label }: { label?: string }) {
   const { colors, radii, screenPadding, typography } = useTheme();
 
-  // A `DimensionValue` needs the literal, not an inferred `string`.
   const rows: { mine: boolean; width: `${number}%` }[] = [
     { mine: false, width: '62%' },
     { mine: true, width: '48%' },

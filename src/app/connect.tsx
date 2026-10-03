@@ -27,16 +27,12 @@ import { DashedBorder } from "@/components/ui/DashedBorder";
 import { ScreenHeader } from "@/components/ui/ScreenHeader";
 import { MyProfileSheet } from "@/components/profile/MyProfileSheet";
 import { createLogger } from "@/services/logger";
+import { formatServiceError } from "@/utils/serviceError";
 import { screenEnter, screenFadeEnter } from "@/theme/motion";
 
 const log = createLogger("connect");
 const CONNECT_CONTENT_ENTER = screenEnter(40);
 const CONNECT_FADE_ENTER = screenFadeEnter(40);
-
-type ErrorMessage =
-  | "Hmm… can't find them. Double-check the Melo ID and try again."
-  | "That's your own ID. Enter your friend's ID to start chatting."
-  | "That didn't work. Check your internet and try again.";
 
 export default function ConnectScreen() {
   const { colors, typography, radii, screenPadding, fontFamily, isDark } =
@@ -47,7 +43,7 @@ export default function ConnectScreen() {
   const { profile } = useProfile();
 
   const [value, setValue] = useState("");
-  const [error, setError] = useState<ErrorMessage | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
 
@@ -72,24 +68,17 @@ export default function ConnectScreen() {
         return;
       }
 
-      log.info(`connect was rejected: ${result.reason}`, {
-        shown:
-          result.reason === "self"
+      const message =
+        result.reason === "unknown"
+          ? formatServiceError(result.error, "Could not connect")
+          : result.reason === "self"
             ? "That's your own ID. Enter your friend's ID to start chatting."
-            : result.reason === "not_found"
-              ? "Hmm… can't find them. Double-check the Melo ID and try again."
-              : "That didn't work. Check your internet and try again.",
-      });
-      setError(
-        result.reason === "self"
-          ? "That's your own ID. Enter your friend's ID to start chatting."
-          : result.reason === "not_found"
-            ? "Hmm… can't find them. Double-check the Melo ID and try again."
-            : "That didn't work. Check your internet and try again.",
-      );
+            : "Hmm… can't find them. Double-check the Melo ID and try again.";
+      log.info(`connect was rejected: ${result.reason}`, { shown: message });
+      setError(message);
     } catch (caught) {
       log.error("connect threw before it could return a result", caught);
-      setError("That didn't work. Check your internet and try again.");
+      setError(formatServiceError(caught, "Could not connect"));
     } finally {
       setBusy(false);
     }
@@ -255,12 +244,6 @@ export default function ConnectScreen() {
             loadingLabel="Finding them…"
             haptic={false}
             testID="start-chat"
-          />
-          <Button
-            label="Recover my account"
-            variant="ghost"
-            size="compact"
-            onPress={() => router.push("/onboarding/recover")}
           />
         </View>
 

@@ -63,6 +63,21 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
           await saveProfile(result.profile);
           if (cancelled || generation !== profileGeneration.current) return;
           setProfile(result.profile);
+        } else if (result.outcome === 'missing') {
+          const restored = await createProfile(
+            { id: stored.id, meloId: stored.melo_id },
+            {
+              displayName: stored.display_name,
+              readingLanguage: stored.reading_language,
+              avatarKey: stored.avatar_key,
+            }
+          );
+          if (cancelled || generation !== profileGeneration.current) return;
+          setProfile(restored);
+          log.warn('restored a device-only profile to Supabase', {
+            meloId: restored.melo_id,
+            uuid: restored.id.slice(0, 8),
+          });
         }
       } catch (error) {
         // A failed sync must not cost the user their session: the device copy is
