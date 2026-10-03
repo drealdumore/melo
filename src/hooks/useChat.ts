@@ -12,12 +12,14 @@ import { useProfile } from '@/hooks/useProfile';
 import { useRealtimeMessages } from '@/hooks/useRealtimeMessages';
 import { usePresence } from '@/hooks/usePresence';
 import { findRoom, getRoomPartner } from '@/services/rooms';
+import { createLogger } from '@/services/logger';
 import {
   deleteFailedMessage,
   isMessageTooLong,
+  needsRetargeting,
+  retargetMessage,
   retryTranslation as retryTranslationService,
   sendMessage,
-  type SendCallbacks,
   type NewMessageInput,
 } from '@/services/messages';
 import type { LocalMessage, PresenceState, Profile, Room } from '@/types/models';
@@ -25,12 +27,15 @@ import type { LocalMessage, PresenceState, Profile, Room } from '@/types/models'
 /** Stop announcing typing after this long without a keystroke. */
 const TYPING_STOP_MS = 3000;
 
+const log = createLogger('chat');
+
 /** Stable stand-in so the realtime hook is not re-created while the room loads. */
 const EMPTY_PROFILE: Profile = {
   id: '00000000-0000-0000-0000-000000000000',
   melo_id: '00000000000',
   display_name: '',
   reading_language: 'en',
+  avatar_key: null,
   created_at: '',
   updated_at: '',
 };
@@ -108,20 +113,37 @@ export function useChat(roomId: string): UseChatResult {
     // A malformed link should resolve to "not found", not fire a doomed query.
     if (!profile || !roomId) return;
     let cancelled = false;
+    log.debug(`opening ${roomId}`);
 
     void (async () => {
       try {
         const found = await findRoom(roomId);
         if (cancelled) return;
         if (!found) {
+          // The room row is gone or invisible. The UI only says "not found", so
+          // the reason is only ever visible here.
+          log.warn(`room ${roomId} could not be found`, {
+            cause: 'the row is missing, or row-level security hides it from this user',
+          });
           setLoaded({ roomId, room: null, friend: null, notFound: true });
           return;
         }
         const partner = await getRoomPartner(found, profile);
         if (cancelled) return;
+        if (!partner) {
+          log.warn(`room ${roomId} has no readable partner profile`, {
+            room: found.id,
+            cause: 'the other profile is missing, or hidden by row-level security',
+          });
+        } else {
+          log.info(`in ${roomId} with ${partner.display_name}`, {
+            reads: partner.reading_language,
+            writes: profile.reading_language,
+          });
+        }
         setLoaded({ roomId, room: found, friend: partner, notFound: !partner });
       } catch (error) {
-        console.warn('Could not open the room', error);
+        log.error(`could not open room ${roomId}`, error);
         if (!cancelled) {
           setLoaded({ roomId, room: null, friend: null, notFound: true });
         }
@@ -138,18 +160,17 @@ export function useChat(roomId: string): UseChatResult {
   /** Remembers the inputs of in-flight sends so a retry can reuse them. */
   const pendingInputs = useRef(new Map<string, NewMessageInput>());
 
-  const startSend = useCallback(
-    (input: NewMessageInput, callbacks: SendCallbacks) => {
-      sendMessage(input, callbacks);
-    },
-    []
-  );
-
   const send = useCallback(
     (text: string): boolean => {
       if (!profile || !friend) return false;
       const trimmed = text.trim();
-      if (trimmed.length === 0 || isMessageTooLong(trimmed)) return false;
+      if (trimmed.length === 0 || isMessageTooLong(trimmed)) {
+        log.debug('send was rejected before it started', {
+          reason: trimmed.length === 0 ? 'empty text' : 'over the length limit',
+          chars: trimmed.length,
+        });
+        return false;
+      }
 
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -163,7 +184,7 @@ export function useChat(roomId: string): UseChatResult {
         targetLanguage: friend.reading_language,
       };
 
-      startSend(input, {
+      sendMessage(input, {
         onPending: (message) => {
           pendingInputs.current.set(message.id, input);
           applyLocalMessage(message);
@@ -173,12 +194,11 @@ export function useChat(roomId: string): UseChatResult {
           if (state !== 'sending') pendingInputs.current.delete(id);
         },
         onSent: applyLocalMessage,
-        onTranslated: applyLocalMessage,
       });
 
       return true;
     },
-    [profile, friend, roomId, startSend, applyLocalMessage, setSendState]
+    [profile, friend, roomId, applyLocalMessage, setSendState]
   );
 
   const retry = useCallback(
@@ -195,14 +215,13 @@ export function useChat(roomId: string): UseChatResult {
 
       // Reusing the original UUID is what makes a retry idempotent: a
       // duplicate-key error from the server means the first try landed.
-      startSend({ ...input, id: message.id }, {
+      sendMessage({ ...input, id: message.id }, {
         onPending: applyLocalMessage,
         onStateChange: (id, state) => setSendState(id, state),
         onSent: applyLocalMessage,
-        onTranslated: applyLocalMessage,
       });
     },
-    [profile?.id, roomId, startSend, applyLocalMessage, setSendState]
+    [profile?.id, roomId, applyLocalMessage, setSendState]
   );
 
   /* ------------------------------------------------------------- recovery */
@@ -217,8 +236,7 @@ export function useChat(roomId: string): UseChatResult {
 
   const retryTranslation = useCallback(
     (message: LocalMessage) => {
-      // Optimistically back to `pending` so the bubble shows the same
-      // "Translating…" state the first attempt had.
+      log.info(`user asked to retry the translation of ${message.id.slice(0, 8)}`);
       patchLocalMessage(message.id, { translation_status: 'pending' });
       void retryTranslationService(message).then((updated) => {
         if (updated) {
@@ -230,6 +248,63 @@ export function useChat(roomId: string): UseChatResult {
     },
     [applyLocalMessage, patchLocalMessage]
   );
+
+  /* ------------------------------------------------- language re-targeting */
+
+  /**
+   * Messages whose translation was addressed to a language this device no longer
+   * reads.
+   *
+   * `target_language` is chosen by whoever sent the message, from their copy of
+   * the reader's profile, and then frozen into the row. Changing the reader's
+   * own language therefore cannot reach anything that was already delivered, so
+   * without this the conversation stays in the old language indefinitely — and
+   * there is no error anywhere to explain why.
+   *
+   * Serialised rather than `Promise.all`: one request per message against an
+   * endpoint that rate-limits by IP is how a history reload earns a 429.
+   *
+   * Attempts are remembered per message *and* per language, so the set is also
+   * the in-flight guard: it stops a second effect pass from firing while the
+   * first is running, and it stops a message whose re-targeting failed from
+   * being retried on every unrelated state change. Keying on the language means a
+   * genuine later switch still gets another attempt.
+   */
+  const retargetAttemptedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!profile) return;
+    const readerId = profile.id;
+    const readerLanguage = profile.reading_language;
+    if (!readerLanguage) return;
+
+    const attempted = retargetAttemptedRef.current;
+    const stale = messages.filter((message) => {
+      if (attempted.has(`${message.id}\u0000${readerLanguage}`)) return false;
+      return needsRetargeting(message, readerId, readerLanguage);
+    });
+    if (stale.length === 0) return;
+
+    log.info(`${stale.length} message(s) are not in ${readerLanguage} yet`, {
+      reads: readerLanguage,
+    });
+
+    let cancelled = false;
+
+    void (async () => {
+      for (const message of stale) {
+        if (cancelled) return;
+        attempted.add(`${message.id}\u0000${readerLanguage}`);
+        const updated = await retargetMessage(message, readerLanguage);
+        if (cancelled) return;
+        if (updated) applyLocalMessage(updated);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [messages, profile, applyLocalMessage]);
 
   /* --------------------------------------------------------------- typing */
 

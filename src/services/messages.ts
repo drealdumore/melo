@@ -1,12 +1,17 @@
 /**
  * The send pipeline and history queries.
  *
- * Order of operations, which is what makes a send look instant and never get
- * stuck:
- *   1. mint a client UUID, render the message as `sending`
- *   2. INSERT with translation_status = 'pending'  →  `sent`
- *   3. translate, then UPDATE the row with the result
+ * Order of operations:
+ *   1. mint a client UUID and render a sender-only optimistic bubble
+ *   2. INSERT the message untranslated, with status `pending`
+ *   3. translate, then write the translation onto the row in place
  *   4. realtime echoes merge by id, so the sender never sees a duplicate
+ *
+ * Delivery deliberately does not wait on the translation endpoint. The endpoint
+ * is unofficial and rate-limits by IP; blocking a send on it meant a throttle
+ * cost the reader the message entirely, not just the translation. A send is
+ * `sent` as soon as the row lands, and a translation failure is recorded on the
+ * row instead of discarding words that were already readable.
  *
  * A failure or a 10s timeout is always `failed` — never a message stuck in
  * `sending`. Retrying reuses the same UUID, so a duplicate-key error means the
@@ -15,8 +20,11 @@
 import * as Crypto from 'expo-crypto';
 
 import { requireSupabase, isSupabaseConfigured } from '@/services/supabase';
-import { translateWithStatus } from '@/services/translation';
-import type { LocalMessage, Message, SendState, TranslationStatus } from '@/types/models';
+import { createLogger, now, since } from '@/services/logger';
+import { sameLanguage, translateWithStatus } from '@/services/translation';
+import type { LocalMessage, Message, SendState } from '@/types/models';
+
+const log = createLogger('messages');
 
 export const HISTORY_LIMIT = 50;
 export const MAX_MESSAGE_LENGTH = 4000;
@@ -34,12 +42,6 @@ export interface NewMessageInput {
   id?: string;
 }
 
-export interface SendHandle {
-  id: string;
-  /** Resolves once the row is durably inserted (`sent`). */
-  sent: Promise<void>;
-}
-
 export function isMessageTooLong(text: string): boolean {
   return text.length > MAX_MESSAGE_LENGTH;
 }
@@ -48,6 +50,17 @@ export function isMessageTooLong(text: string): boolean {
 /* History                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * Every delivered row, whatever its translation status.
+ *
+ * These queries used to ask for `translated` or `skipped` only, because a row
+ * was not written until its translation had succeeded. Delivery no longer waits
+ * on the translation endpoint, so `pending` is the normal state of a message
+ * that has just arrived and `failed` is a message whose words arrived without
+ * one. Filtering on the translation would hide both — putting the endpoint's
+ * latency back in front of the reader, and dropping failed messages from history
+ * entirely.
+ */
 export async function loadMessages(roomId: string, limit = HISTORY_LIMIT): Promise<Message[]> {
   if (!isSupabaseConfigured) return [];
 
@@ -60,6 +73,7 @@ export async function loadMessages(roomId: string, limit = HISTORY_LIMIT): Promi
 
   if (error) throw error;
   // Newest first, which is the order the inverted FlatList wants.
+  log.debug(`history for ${roomId}`, { rows: data?.length ?? 0, limit });
   return data ?? [];
 }
 
@@ -75,6 +89,7 @@ export async function loadMessagesSince(roomId: string, sinceIso: string): Promi
     .order('created_at', { ascending: false });
 
   if (error) throw error;
+  log.debug(`catch-up for ${roomId} since ${sinceIso}`, { rows: data?.length ?? 0 });
   return data ?? [];
 }
 
@@ -95,6 +110,9 @@ export async function loadLatestPerRoom(roomIds: string[]): Promise<Map<string, 
     .limit(roomIds.length * 4);
 
   if (error) throw error;
+  log.debug(`latest per room for ${roomIds.length} room(s)`, {
+    rows: data?.length ?? 0,
+  });
   for (const row of data ?? []) {
     if (!latest.has(row.room_id)) latest.set(row.room_id, row);
   }
@@ -115,7 +133,8 @@ export async function markDelivered(messageIds: string[], friendId: string): Pro
     .in('id', messageIds)
     .is('delivered_at', null)
     .eq('sender_id', friendId);
-  if (error) console.warn('markDelivered failed', error.message);
+  if (error) log.warn('markDelivered failed', { ids: messageIds.length }, error);
+  else log.debug(`marked ${messageIds.length} message(s) delivered`);
 }
 
 /**
@@ -131,7 +150,8 @@ export async function markRead(messageIds: string[], friendId: string): Promise<
     .in('id', messageIds)
     .is('read_at', null)
     .eq('sender_id', friendId);
-  if (error) console.warn('markRead failed', error.message);
+  if (error) log.warn('markRead failed', { ids: messageIds.length }, error);
+  else log.debug(`marked ${messageIds.length} message(s) read`);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -142,10 +162,12 @@ export type SendCallbacks = {
   /** Optimistic row to render immediately. */
   onPending: (message: LocalMessage) => void;
   onStateChange: (id: string, state: SendState) => void;
-  /** Fired after the row is inserted and we know its server timestamps. */
+  /**
+   * Fired once when the row is durably delivered, and again when its
+   * translation is written. Callers must tolerate being called twice for one
+   * send and treat the first call as the delivery.
+   */
   onSent?: (message: LocalMessage) => void;
-  /** Fired once translation is written back. */
-  onTranslated?: (message: LocalMessage) => void;
 };
 
 function optimisticMessage(input: NewMessageInput, id: string, now: string): LocalMessage {
@@ -186,14 +208,20 @@ function withTimeout<T>(promise: PromiseLike<T>, ms: number, message: string): P
 }
 
 /**
- * Step 2 only: insert the row and resolve when the server has it. A duplicate
- * key counts as success, which is exactly what makes retry safe.
+ * Inserts a fully translated row. A duplicate is updated with the completed
+ * translation too, covering retries of rows left pending by an older app.
  */
 async function insertMessage(row: LocalMessage): Promise<LocalMessage> {
   if (!isSupabaseConfigured) {
+    log.warn('insert skipped: Supabase is not configured', { id: row.id.slice(0, 8) });
     return { ...row, sendState: 'sent', created_at: new Date().toISOString() };
   }
 
+  const started = now();
+  const translatedFields = {
+    translated_text: row.translated_text,
+    translation_status: row.translation_status,
+  };
   const { data, error } = await withTimeout(
     requireSupabase()
       .from('messages')
@@ -204,7 +232,7 @@ async function insertMessage(row: LocalMessage): Promise<LocalMessage> {
         original_text: row.original_text,
         source_language: row.source_language,
         target_language: row.target_language,
-        translation_status: row.translation_status,
+        ...translatedFields,
       })
       .select()
       .single(),
@@ -214,104 +242,151 @@ async function insertMessage(row: LocalMessage): Promise<LocalMessage> {
 
   if (error) {
     if (error.code === '23505') {
-      // A previous attempt with this UUID already landed. Fetch it so the UI
-      // can adopt the real timestamps.
-      const { data: existing } = await requireSupabase()
+      // A previous attempt may have inserted a pending row before translation
+      // was required. Do not treat that row as delivered until it is completed.
+      const { data: existing, error: updateError } = await requireSupabase()
         .from('messages')
-        .select('*')
+        .update(translatedFields)
         .eq('id', row.id)
+        .select()
         .maybeSingle();
-      if (existing) return { ...existing, sendState: 'sent' };
+      if (updateError) {
+        log.error(`could not complete duplicate ${row.id.slice(0, 8)}`, updateError);
+        throw updateError;
+      }
+      if (existing) {
+        log.info(`insert ${row.id.slice(0, 8)} was a duplicate; completed its translation`, {
+          latency: since(started),
+        });
+        return { ...existing, sendState: 'sent' };
+      }
     }
+    log.error(`insert failed after ${since(started)}`, {
+      id: row.id.slice(0, 8),
+      room: row.room_id,
+      code: error.code,
+    }, error);
     throw error;
   }
 
+  log.info(`inserted ${row.id.slice(0, 8)} in ${since(started)}`, {
+    room: row.room_id,
+    chars: row.original_text.length,
+  });
   return { ...data, sendState: 'sent' };
 }
 
-/**
- * Step 3: translate, then write the outcome back onto the same row. The
- * original text is never touched.
- */
-async function applyTranslation(row: LocalMessage): Promise<LocalMessage> {
-  const result = await translateWithStatus(
-    row.original_text,
-    row.target_language,
-    row.source_language
-  );
+/* -------------------------------------------------------------------------- */
+/* Translation                                                                 */
+/* -------------------------------------------------------------------------- */
 
-  const status: TranslationStatus = result.status;
-  const translatedText = status === 'translated' ? result.text : null;
+async function applyTranslation(
+  row: Message,
+  targetLanguage?: string
+): Promise<LocalMessage> {
+  const target = targetLanguage ?? row.target_language;
+  const result = await translateWithStatus(row.original_text, target, row.source_language);
+  const translatedText = result.status === 'translated' ? result.text : null;
+  const localOutcome: LocalMessage = {
+    ...row,
+    target_language: target,
+    translated_text: translatedText,
+    translation_status: result.status,
+    sendState: 'sent',
+  };
 
-  if (!isSupabaseConfigured) {
-    return {
-      ...row,
-      translated_text: translatedText,
-      translation_status: status,
-      sendState: 'sent',
-    };
-  }
+  if (!isSupabaseConfigured) return localOutcome;
 
   const { data, error } = await requireSupabase()
     .from('messages')
-    .update({ translated_text: translatedText, translation_status: status })
+    .update({
+      translated_text: translatedText,
+      translation_status: result.status,
+      target_language: target,
+    })
     .eq('id', row.id)
     .select()
     .single();
 
   if (error) {
-    // The message itself is safely stored. Surface a genuine "couldn't
-    // translate" rather than pretending it worked.
-    console.warn('Could not record translation result', error.message);
-    return {
-      ...row,
-      translated_text: null,
-      translation_status: 'failed',
-      sendState: 'sent',
-    };
+    log.error(`translation result could not be written for ${row.id.slice(0, 8)}`, error);
+    return localOutcome;
   }
 
   return { ...data, sendState: 'sent' };
 }
 
 /**
- * Runs the full pipeline. Returns as soon as the optimistic row exists so the
- * composer can clear instantly; the rest settles in the background.
+ * Completes the translation of a row that has already been delivered, and hands
+ * the updated row back so the sender's bubble reflects the outcome.
+ *
+ * Never throws. The message is already in the other person's chat by the time
+ * this runs, so a translation failure is recorded as `failed` on the row rather
+ * than surfaced as a failed send — the words arrived, only the translation did
+ * not, and the reader gets the original with a retry chip.
  */
-export function sendMessage(input: NewMessageInput, callbacks: SendCallbacks): SendHandle {
+async function completeTranslation(
+  row: LocalMessage,
+  callbacks: SendCallbacks
+): Promise<void> {
+  try {
+    const updated = await applyTranslation(row);
+    callbacks.onSent?.(updated);
+    log.info(`translation ${updated.translation_status} for ${row.id.slice(0, 8)}`, {
+      target: updated.target_language,
+      toChars: updated.translated_text?.length ?? 0,
+    });
+  } catch (error) {
+    log.error(`translation for ${row.id.slice(0, 8)} threw`, error);
+  }
+}
+
+/**
+ * Shows the sender an optimistic bubble immediately, delivers the row
+ * untranslated, then completes the translation in place.
+ *
+ * `onSent` fires twice by design: once when the row is durably delivered and
+ * once when the translation lands. A send is `sent` from the first call, because
+ * from that moment the message is in the other person's chat.
+ */
+export function sendMessage(input: NewMessageInput, callbacks: SendCallbacks): void {
   const id = input.id ?? Crypto.randomUUID();
   const pending = optimisticMessage(input, id, new Date().toISOString());
+  const started = now();
+  const isRetry = Boolean(input.id);
+
+  log.info(
+    `${isRetry ? 'retry' : 'send'} ${id.slice(0, 8)} ${input.sourceLanguage} → ${input.targetLanguage}`,
+    { room: input.roomId, chars: input.text.length, retry: isRetry }
+  );
 
   callbacks.onPending(pending);
 
   const sent = (async () => {
     try {
+      // The row goes in first, untranslated, with the status the reader can see
+      // as "still working". Delivery used to wait on the translation endpoint,
+      // which meant a throttle cost up to 12s of "Sending…" and then dropped the
+      // message entirely — the reader never saw words that the sender could see.
       const inserted = await insertMessage(pending);
-      callbacks.onStateChange(id, 'sent');
       callbacks.onSent?.(inserted);
+      callbacks.onStateChange(id, 'sent');
+      log.info(`send ${id.slice(0, 8)} delivered in ${since(started)}`);
+
+      await completeTranslation(inserted, callbacks);
     } catch (error) {
-      console.warn('Send failed', error);
+      log.error(`send ${id.slice(0, 8)} failed after ${since(started)}`, {
+        retry: isRetry,
+        delivered: false,
+      }, error);
       callbacks.onStateChange(id, 'failed');
       throw error;
     }
   })();
 
-  // A rejected `sent` must not surface as an unhandled rejection; the caller
-  // sees the failure through onStateChange and the retry affordance.
-  const guarded = sent.catch(() => undefined);
-
-  void (async () => {
-    const inserted = await sent.catch(() => null);
-    if (!inserted) return;
-    try {
-      const finished = await applyTranslation(inserted);
-      callbacks.onTranslated?.(finished);
-    } catch (error) {
-      console.warn('Translation step failed', error);
-    }
-  })();
-
-  return { id, sent: guarded };
+  // The rejection must not surface as an unhandled one; the caller sees the
+  // failure through onStateChange and the retry affordance.
+  sent.catch(() => undefined);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -326,14 +401,35 @@ export function mergeMessages(existing: LocalMessage[], incoming: Message[]): Lo
   let changed = false;
 
   for (const row of incoming) {
+    const localSendState =
+      'sendState' in row &&
+      (row.sendState === 'sending' || row.sendState === 'sent' || row.sendState === 'failed')
+        ? row.sendState
+        : undefined;
+
     const previous = byId.get(row.id);
+
+    // A row we have never seen is new whatever its translation status. This used
+    // to skip anything that was not `translated` or `skipped`, which was safe
+    // only while a row was never written until its translation succeeded. Now a
+    // freshly delivered message arrives as `pending`, and dropping it would hide
+    // the message from the reader until the translation endpoint answered —
+    // reintroducing, on the receiving side, exactly the wait the send pipeline
+    // was changed to remove.
     if (!previous) {
       byId.set(row.id, { ...row, sendState: 'sent' });
       changed = true;
       continue;
     }
-    // Keep the optimistic sendState: the server has no idea it was "sending".
-    const merged: LocalMessage = { ...previous, ...row, sendState: previous.sendState ?? 'sent' };
+
+    // For a row we already hold, the local sendState wins: the server has no
+    // idea it was "sending", and a failed send has no server row to speak for
+    // it. Everything else, including the translation, is the server's.
+    const merged: LocalMessage = {
+      ...previous,
+      ...row,
+      sendState: localSendState ?? previous.sendState ?? 'sent',
+    };
     if (!sameMessage(previous, merged)) {
       byId.set(row.id, merged);
       changed = true;
@@ -349,6 +445,68 @@ export function mergeMessages(existing: LocalMessage[], incoming: Message[]): Lo
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Whether a delivered message is sitting in a language this reader no longer
+ * reads.
+ *
+ * The target language is chosen by the sender, on the sender's device, from
+ * their copy of the reader's profile at the moment they hit send. It is then
+ * frozen into the row. So when the reader switches language, every message that
+ * was addressed to their old one is stale — and nothing in the schema or the
+ * read path would ever notice.
+ *
+ * Only the reader's own messages qualify, and only once the sender is finished
+ * with them: a `pending` row is mid-translation on the other device, and
+ * re-targeting it would have the two writes race.
+ */
+export function needsRetargeting(
+  message: Message,
+  readerId: string,
+  readerLanguage: string
+): boolean {
+  if (message.sender_id === readerId) return false;
+  if (message.translation_status === 'pending') return false;
+  if (!readerLanguage) return false;
+  return !sameLanguage(message.target_language, readerLanguage);
+}
+
+/**
+ * Brings one stale message forward into the reader's current language.
+ *
+ * This is a last-writer-wins patch on `translated_text`, which is worth being
+ * explicit about: the row has room for exactly one translation, so a message
+ * read by two people in two languages cannot hold both. The sender's own bubble
+ * never renders `translated_text`, so nothing is lost on their side, and a
+ * reader who switches back simply gets it re-translated again on their next
+ * open.
+ */
+export async function retargetMessage(
+  message: Message,
+  readerLanguage: string
+): Promise<LocalMessage | null> {
+  const id = message.id.slice(0, 8);
+  log.info(`retargeting ${id} into ${readerLanguage}`, {
+    was: message.target_language,
+    now: readerLanguage,
+  });
+  try {
+    const updated = await applyTranslation(message, readerLanguage);
+    if (updated.translation_status === 'failed') {
+      log.error(`retargeting ${id} into ${readerLanguage} failed`, {
+        status: updated.translation_status,
+      });
+      return null;
+    }
+    log.info(`retargeted ${id} into ${readerLanguage}`, {
+      status: updated.translation_status,
+    });
+    return updated;
+  } catch (error) {
+    log.error(`retargeting ${id} threw`, error);
+    return null;
+  }
+}
+
+/**
  * Re-runs the translation for a message that came back `failed`.
  *
  * The message itself is intact — only the translation is missing — so this
@@ -357,11 +515,32 @@ export function mergeMessages(existing: LocalMessage[], incoming: Message[]): Lo
  * rather than pretending it is still in progress.
  */
 export async function retryTranslation(message: Message): Promise<Message | null> {
+  const id = message.id.slice(0, 8);
+  log.info(`retrying translation for ${id}`, {
+    source: message.source_language,
+    target: message.target_language,
+  });
   try {
-    const updated = await applyTranslation({ ...message, sendState: 'sent' });
-    return updated.translation_status === 'translated' ? updated : null;
+    const updated = await applyTranslation(message);
+    if (updated.translation_status === 'failed') {
+      log.error(`translation retry for ${id} did not succeed`, {
+        status: updated.translation_status,
+      });
+      return null;
+    }
+    if (updated.translation_status === 'skipped') {
+      // The service answered that there was nothing to translate. That is a
+      // result, not a failure, and re-running it will not change it.
+      log.info(`translation retry for ${id} needed no translation`, {
+        declared: message.source_language,
+        target: message.target_language,
+      });
+      return updated;
+    }
+    log.info(`translation retry for ${id} succeeded`);
+    return updated;
   } catch (error) {
-    console.warn('Translation retry failed', error);
+    log.error(`translation retry for ${id} threw`, error);
     return null;
   }
 }
@@ -379,8 +558,12 @@ export async function deleteFailedMessage(messageId: string): Promise<void> {
   if (!isSupabaseConfigured) return;
   try {
     await requireSupabase().from('messages').delete().eq('id', messageId);
+    log.info(`discarded failed message ${messageId.slice(0, 8)}`);
   } catch (error) {
-    console.warn('Could not delete the message', error);
+    // Swallowed on purpose: the caller always drops it from local state, and a
+    // message the user threw away does not need an error dialog. It does still
+    // need a line in the log, in case the row is now orphaned in the database.
+    log.warn(`could not delete message ${messageId.slice(0, 8)}; it may be orphaned`, error);
   }
 }
 
@@ -388,6 +571,10 @@ function sameMessage(a: LocalMessage, b: LocalMessage): boolean {
   return (
     a.translation_status === b.translation_status &&
     a.translated_text === b.translated_text &&
+    // Part of the translation outcome: a message re-targeted into a new language
+    // can come back with the same text and status, and the merge has to notice
+    // or the re-targeting effect will keep re-running against a stale target.
+    a.target_language === b.target_language &&
     a.delivered_at === b.delivered_at &&
     a.read_at === b.read_at &&
     a.sendState === b.sendState

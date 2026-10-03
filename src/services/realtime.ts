@@ -15,7 +15,10 @@
 import type { RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
 
 import { requireSupabase } from '@/services/supabase';
+import { createLogger } from '@/services/logger';
 import type { Message } from '@/types/models';
+
+const log = createLogger('realtime');
 
 export type ChannelStatus = 'connecting' | 'subscribed' | 'reconnecting' | 'error';
 
@@ -61,7 +64,22 @@ export function subscribeToRoom(
   handlers: RoomRealtimeHandlers
 ): RoomSubscription {
   const client: SupabaseClient = requireSupabase();
-  const channel = client.channel(channelName(roomId));
+  const name = channelName(roomId);
+  const channel = client.channel(name);
+  log.debug(`subscribing to ${name}`);
+
+  // Both message events land in the same handler, but they mean different
+  // things: INSERT is a new message, UPDATE is usually a translation landing.
+  // Logging the event type is what makes "the bubble never appeared" traceable.
+  const onChange = (event: string) => (payload: { new: Message }) => {
+    const message = payload.new as Message;
+    log.debug(`${event} ${message.id.slice(0, 8)} in ${name}`, {
+      from: message.sender_id === meId ? 'me' : 'friend',
+      chars: message.original_text?.length ?? 0,
+      translation: message.translation_status,
+    });
+    handlers.onMessage(message);
+  };
 
   channel
     .on(
@@ -72,7 +90,7 @@ export function subscribeToRoom(
         table: 'messages',
         filter: `room_id=eq.${roomId}`,
       },
-      (payload) => handlers.onMessage(payload.new as Message)
+      onChange('INSERT')
     )
     .on(
       'postgres_changes',
@@ -82,39 +100,54 @@ export function subscribeToRoom(
         table: 'messages',
         filter: `room_id=eq.${roomId}`,
       },
-      (payload) => handlers.onMessage(payload.new as Message)
+      onChange('UPDATE')
     )
     .on(PRESENCE_EVENT, { event: 'sync' }, () => {
       const state = channel.presenceState<Record<string, unknown[]>>();
       const ids = Object.keys(state);
+      log.debug(`presence sync on ${name}: ${ids.length} online`, { meOnline: ids.includes(meId) });
       handlers.onPresenceChange?.(ids);
     })
     .on(PRESENCE_EVENT, { event: 'join' }, () => {
-      handlers.onPresenceChange?.(Object.keys(channel.presenceState()));
+      const ids = Object.keys(channel.presenceState());
+      log.debug(`presence join on ${name}: ${ids.length} online`);
+      handlers.onPresenceChange?.(ids);
     })
     .on(PRESENCE_EVENT, { event: 'leave' }, () => {
-      handlers.onPresenceChange?.(Object.keys(channel.presenceState()));
+      const ids = Object.keys(channel.presenceState());
+      log.debug(`presence leave on ${name}: ${ids.length} still online`);
+      handlers.onPresenceChange?.(ids);
     })
     .on('broadcast', { event: TYPING_EVENT }, ({ payload }) => {
       const data = payload as TypingPayload;
-      if (data?.userId && data.userId !== meId) handlers.onTyping?.(data);
+      if (data?.userId && data.userId !== meId) {
+        log.debug(`friend is ${data.isTyping ? 'typing' : 'stopped typing'}`, {
+          from: data.userId.slice(0, 8),
+        });
+        handlers.onTyping?.(data);
+      }
     })
     .subscribe(async (status, error) => {
       switch (status) {
         case 'SUBSCRIBED':
           handlers.onStatusChange?.('subscribed');
           await channel.track({ userId: meId, online_at: new Date().toISOString() });
+          log.info(`${name} is live`);
           break;
         case 'CHANNEL_ERROR':
         case 'TIMED_OUT':
           handlers.onStatusChange?.('reconnecting');
-          console.warn(`Realtime ${status} on ${channelName(roomId)}`, error?.message ?? '');
+          // Logged at warn so LogBox flags a chat that has gone quiet, which is
+          // otherwise just messages that silently stop arriving.
+          log.warn(`${name} hit ${status}`, { detail: error?.message ?? 'no error given' });
           break;
         case 'CLOSED':
           handlers.onStatusChange?.('reconnecting');
+          log.info(`${name} was closed`);
           break;
         default:
           handlers.onStatusChange?.('connecting');
+          log.debug(`${name} is ${status}`);
       }
     });
 
@@ -123,6 +156,7 @@ export function subscribeToRoom(
   return {
     channel,
     heartbeat: () => {
+      log.debug(`heartbeat on ${name}`);
       void channel.track({ userId: meId, online_at: new Date().toISOString() });
     },
     sendTyping: (isTyping: boolean) => {
@@ -132,6 +166,7 @@ export function subscribeToRoom(
       // stick on the other device.
       if (isTyping ? elapsed < TYPING_THROTTLE_MS : elapsed < 100) return;
       lastTypingSentAt = Date.now();
+      log.debug(`broadcasting typing=${isTyping} on ${name}`);
       void channel.send({
         type: 'broadcast',
         event: TYPING_EVENT,
@@ -139,10 +174,12 @@ export function subscribeToRoom(
       });
     },
     unsubscribe: async () => {
+      log.info(`leaving ${name}`);
       try {
         await channel.untrack();
       } catch {
         // The socket may already be gone; nothing to clean up.
+        log.debug(`untrack on ${name} failed; the socket is probably already closed`);
       }
       await client.removeChannel(channel);
     },
@@ -159,28 +196,43 @@ export function subscribeToRoomsForUser(
   onMessage: (message: Message) => void,
   onStatusChange?: (status: ChannelStatus) => void
 ): () => void {
-  if (roomIds.length === 0) return () => {};
+  if (roomIds.length === 0) {
+    log.debug('no rooms to watch for the chats list');
+    return () => {};
+  }
 
   const client = requireSupabase();
-  const channel = client.channel(`user:${meId}`);
+  const name = `user:${meId}`;
+  const channel = client.channel(name);
+  log.debug(`subscribing to ${name} for ${roomIds.length} room(s)`);
 
   channel.on(
     'postgres_changes',
     { event: 'INSERT', schema: 'public', table: 'messages' },
     (payload) => {
       const message = payload.new as Message;
-      if (roomIds.includes(message.room_id)) onMessage(message);
+      // A message in a room this client is not showing is normal: the chats
+      // list watches every room, and only some are open.
+      if (!roomIds.includes(message.room_id)) {
+        log.debug(`ignored ${message.id.slice(0, 8)} from an unwatched room`);
+        return;
+      }
+      onMessage(message);
     }
   );
 
   channel.subscribe((status) => {
-    if (status === 'SUBSCRIBED') onStatusChange?.('subscribed');
-    else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+    if (status === 'SUBSCRIBED') {
+      onStatusChange?.('subscribed');
+      log.info(`${name} is live`);
+    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
       onStatusChange?.('reconnecting');
+      log.warn(`${name} hit ${status}; unread dots may go stale`);
     }
   });
 
   return () => {
+    log.info(`leaving ${name}`);
     void client.removeChannel(channel);
   };
 }
@@ -254,11 +306,20 @@ export function subscribeToAppPresence(
 ): AppPresenceSubscription {
   const client: SupabaseClient = requireSupabase();
   const channel = client.channel(APP_PRESENCE_CHANNEL);
+  log.debug(`subscribing to ${APP_PRESENCE_CHANNEL} as ${meId.slice(0, 8)}`);
 
-  const publish = (roomId: string | null) =>
+  const publish = (roomId: string | null) => {
+    log.debug(`advertising presence: room ${roomId ?? 'none'}`);
     void channel.track({ userId: meId, roomId, at: new Date().toISOString() });
+  };
 
-  const emit = () => handlers.onPresenceChange?.(readAppPresence(channel));
+  const emit = () => {
+    const entries = readAppPresence(channel);
+    log.debug(`${APP_PRESENCE_CHANNEL}: ${entries.length} user(s) in the app`, {
+      rooms: entries.map((entry) => entry.roomId ?? 'list'),
+    });
+    handlers.onPresenceChange?.(entries);
+  };
 
   channel
     .on(PRESENCE_EVENT, { event: 'sync' }, emit)
@@ -269,24 +330,29 @@ export function subscribeToAppPresence(
         case 'SUBSCRIBED':
           handlers.onStatusChange?.('subscribed');
           publish(null);
+          log.info(`${APP_PRESENCE_CHANNEL} is live`);
           break;
         case 'CHANNEL_ERROR':
         case 'TIMED_OUT':
         case 'CLOSED':
           handlers.onStatusChange?.('reconnecting');
+          log.warn(`${APP_PRESENCE_CHANNEL} hit ${status}; online rings will be wrong`);
           break;
         default:
           handlers.onStatusChange?.('connecting');
+          log.debug(`${APP_PRESENCE_CHANNEL} is ${status}`);
       }
     });
 
   return {
     update: publish,
     untrack: async () => {
+      log.info('going to the background: untracking presence');
       try {
         await channel.untrack();
       } catch {
         // The socket may already be gone; nothing to clean up.
+        log.debug('untrack failed; the socket is probably already closed');
       }
     },
     unsubscribe: async () => {
@@ -296,12 +362,15 @@ export function subscribeToAppPresence(
         // Nothing to clean up.
       }
       await client.removeChannel(channel);
+      log.info(`left ${APP_PRESENCE_CHANNEL}`);
     },
   };
 }
 
 /** Applies an exponential backoff that survives the component unmounting. */
 export function scheduleRetry(attempt: number, run: () => void): () => void {
-  const timer = setTimeout(run, backoffFor(attempt));
+  const wait = backoffFor(attempt);
+  log.info(`reconnect attempt ${attempt + 1} in ${wait}ms`);
+  const timer = setTimeout(run, wait);
   return () => clearTimeout(timer);
 }

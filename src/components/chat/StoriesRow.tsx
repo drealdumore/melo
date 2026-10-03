@@ -1,32 +1,36 @@
 /**
- * Stories row at the top of the Chats screen (matching fable-stories.png).
- * Displays "My story" followed by horizontal contacts with story rings.
+ * Profile and chat shortcuts at the top of the Chats screen.
+ * Follows benchmark messenger patterns with live presence rings and instant friend jumps.
  */
-import { memo } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { memo } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { useTheme } from "@/hooks/useTheme";
-import { AnimatedPressable, usePressable } from "@/hooks/usePressable";
-import { Avatar } from "@/components/ui/Avatar";
-import { Icon } from "@/components/ui/Icon";
-import type { ChatSummary } from "@/types/models";
+import { useTheme } from '@/hooks/useTheme';
+import { AnimatedPressable, usePressable } from '@/hooks/usePressable';
+import { Avatar } from '@/components/ui/Avatar';
+import { Icon } from '@/components/ui/Icon';
+import type { ChatSummary } from '@/types/models';
 
 export interface StoriesRowProps {
   myProfileName?: string;
+  myAvatarKey?: string | null;
   chats: ChatSummary[];
-  presenceOf: (id: string) => "online" | "offline";
+  presenceOf: (id: string) => 'online' | 'offline';
   onOpenMyProfile: () => void;
   onOpenChat: (roomId: string) => void;
+  onConnectFriend?: () => void;
 }
 
 function StoriesRowComponent({
-  myProfileName = "Me",
+  myProfileName = 'You',
+  myAvatarKey,
   chats,
   presenceOf,
   onOpenMyProfile,
   onOpenChat,
+  onConnectFriend,
 }: StoriesRowProps) {
-  const { colors, typography, screenPadding } = useTheme();
+  const { colors, screenPadding } = useTheme();
 
   return (
     <ScrollView
@@ -38,33 +42,38 @@ function StoriesRowComponent({
       ]}
       style={styles.container}
     >
-      {/* My Story Item */}
+      {/* Profile Shortcut */}
       <StoryItem
-        name="My story"
+        name={myProfileName}
         onPress={onOpenMyProfile}
         renderAvatar={() => (
-          <View
-            style={[
-              styles.myStoryCircle,
-              { backgroundColor: colors.surface, borderColor: colors.border },
-            ]}
-          >
-            <Icon
-              name="plus"
-              size={22}
-              color={colors.textPrimary}
-              strokeWidth={2.2}
-            />
+          <View style={styles.avatarWrap}>
+            <View style={[styles.myAvatarBorder, { borderColor: colors.border }]}>
+              <Avatar
+                name={myProfileName}
+                avatarKey={myAvatarKey}
+                size={54}
+              />
+            </View>
+            <View
+              style={[
+                styles.badge,
+                { backgroundColor: colors.accent, borderColor: colors.background },
+              ]}
+            >
+              <Icon name="person" size={11} color={colors.onAccent} strokeWidth={2.4} />
+            </View>
           </View>
         )}
       />
 
-      {/* Friends Stories */}
+
+      {/* Friend Chat Shortcuts */}
       {chats.map((chat) => {
         const friend = chat.friend;
         const firstName =
           friend.display_name.trim().split(/\s+/)[0] ?? friend.display_name;
-        const online = presenceOf(friend.id) === "online";
+        const online = presenceOf(friend.id) === 'online';
 
         return (
           <StoryItem
@@ -77,12 +86,25 @@ function StoriesRowComponent({
                   style={[
                     styles.storyRing,
                     {
-                      borderColor: online ? colors.info : colors.accent,
+                      borderColor: online ? colors.info : colors.border,
+                      backgroundColor: online ? colors.accentTint : 'transparent',
                     },
                   ]}
                 >
-                  <Avatar name={friend.display_name} size={52} />
+                  <Avatar
+                    name={friend.display_name}
+                    avatarKey={friend.avatar_key}
+                    size={52}
+                  />
                 </View>
+                {online ? (
+                  <View
+                    style={[
+                      styles.onlineBadge,
+                      { backgroundColor: colors.info, borderColor: colors.background },
+                    ]}
+                  />
+                ) : null}
               </View>
             )}
           />
@@ -102,7 +124,7 @@ function StoryItem({
   renderAvatar: () => React.ReactNode;
 }) {
   const { colors, typography } = useTheme();
-  const { onPressIn, onPressOut, style } = usePressable();
+  const { onPressIn, onPressOut, style } = usePressable({ scale: 0.94 });
 
   return (
     <AnimatedPressable
@@ -131,26 +153,51 @@ function StoryItem({
 export const StoriesRow = memo(StoriesRowComponent);
 
 const styles = StyleSheet.create({
-  container: { flexGrow: 0, marginVertical: 8 },
-  scrollContent: { gap: 16, alignItems: "center", paddingVertical: 6 },
-  item: { alignItems: "center", width: 66, gap: 6 },
-  myStoryCircle: {
+  container: { flexGrow: 0, marginVertical: 6 },
+  scrollContent: { gap: 14, alignItems: 'center', paddingVertical: 4 },
+  item: { alignItems: 'center', width: 68, gap: 6 },
+  avatarWrap: {
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  myAvatarBorder: {
+    padding: 2,
+    borderRadius: 34,
+    borderWidth: 1.5,
+  },
+  badge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addCircle: {
     width: 60,
     height: 60,
     borderRadius: 30,
     borderWidth: 1.5,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarWrap: {
-    position: "relative",
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   storyRing: {
     padding: 2.5,
-    borderRadius: 36,
+    borderRadius: 34,
     borderWidth: 2,
   },
-  label: { textAlign: "center", fontSize: 13 },
+  onlineBadge: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    width: 13,
+    height: 13,
+    borderRadius: 7,
+    borderWidth: 2,
+  },
+  label: { textAlign: 'center', fontSize: 13, letterSpacing: -0.2 },
 });

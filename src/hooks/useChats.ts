@@ -9,7 +9,10 @@ import { useProfile } from '@/hooks/useProfile';
 import { listChats } from '@/services/rooms';
 import { loadLatestPerRoom } from '@/services/messages';
 import { subscribeToRoomsForUser } from '@/services/realtime';
+import { createLogger } from '@/services/logger';
 import type { ChatSummary, LocalMessage, Message, Profile } from '@/types/models';
+
+const log = createLogger('chats');
 
 export interface UseChatsResult {
   chats: ChatSummary[];
@@ -42,6 +45,9 @@ export function useChats(): UseChatsResult {
 
     // Most recent conversation first; a chat never messaged sits last.
     summaries.sort(byRecency);
+    log.debug(`built ${summaries.length} summary row(s)`, {
+      unread: summaries.filter((chat) => chat.unreadCount > 0).length,
+    });
     return summaries;
   }, []);
 
@@ -66,7 +72,8 @@ export function useChats(): UseChatsResult {
         if (!cancelled) apply(summaries);
       })
       .catch((error: unknown) => {
-        console.warn('Could not load chats', error);
+        // The list renders an error state, but never says why it happened.
+        log.error('the chats list could not be loaded', error);
         if (!cancelled) failed();
       });
     return () => {
@@ -79,9 +86,12 @@ export function useChats(): UseChatsResult {
     if (!profile) return;
     const subscription = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
+      log.debug('back in the foreground: refreshing the chats list');
       void fetchChats(profile)
         .then(apply)
-        .catch((error: unknown) => console.warn('Could not refresh chats', error));
+        .catch((error: unknown) => {
+          log.error('the foreground refresh of the chats list failed', error);
+        });
     });
     return () => subscription.remove();
   }, [profile, fetchChats, apply]);
@@ -89,10 +99,11 @@ export function useChats(): UseChatsResult {
   const refresh = useCallback(() => {
     if (!profile) return;
     setRefreshing(true);
+    log.info('user pulled to refresh the chats list');
     void fetchChats(profile)
       .then(apply)
       .catch((error: unknown) => {
-        console.warn('Could not refresh chats', error);
+        log.error('the pull-to-refresh fetch failed', error);
         failed();
       });
   }, [profile, fetchChats, apply, failed]);

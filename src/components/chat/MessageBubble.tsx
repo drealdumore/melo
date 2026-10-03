@@ -1,24 +1,22 @@
 /**
  * One message bubble.
- *
- * Received messages show the translation, with the original always one tap away
- * behind a spring. A failed translation shows the original plus an honest
- * failure state and a way to try again — never a silent fallback, never an
- * overwrite. Our own messages always show our own words.
- *
- * A small rotation is what stops a long run of bubbles reading as a wall: each
- * bubble leans very slightly, and the lean alternates. It is a degree and a half
- * — enough to see, not enough to look broken.
+ * Received messages show the translation with original always one tap away.
  */
 import { memo, useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, {
+  Easing,
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { useTheme } from '@/hooks/useTheme';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { AnimatedPressable, usePressable } from '@/hooks/usePressable';
 import { isRtl } from '@/constants/languages';
-import { entrance, springConfig, timingConfig } from '@/theme/motion';
+import { springConfig, timingConfig } from '@/theme/motion';
 import type { LocalMessage, SendState } from '@/types/models';
 import { Icon } from '@/components/ui/Icon';
 
@@ -29,8 +27,6 @@ export interface MessageBubbleProps {
   isLastInGroup: boolean;
   /** True when this row appeared after the list settled; drives the entrance. */
   animateIn: boolean;
-  /** Alternates the lean so a run does not look stamped. */
-  tiltSide: 1 | -1;
   /** The very last message you sent is the only one that gets a status line. */
   isLatestMine: boolean;
   onRetry: (message: LocalMessage) => void;
@@ -39,14 +35,17 @@ export interface MessageBubbleProps {
 }
 
 /** Vertical gap between bubbles inside a run. */
-const RUN_GAP = 2;
+const RUN_GAP = 3;
 
 function describe(message: LocalMessage, isMine: boolean, body: string): string {
   if (isMine) return `You said: ${body}`;
   if (message.translation_status === 'failed') {
-    return `Could not translate. Original: ${message.original_text}`;
+    return `Couldn't translate that one. Original: ${message.original_text}`;
   }
-  return `Translated: ${body}. Original: ${message.original_text}`;
+  if (message.translation_status === 'skipped') {
+    return body;
+  }
+  return `Translated: ${body}. Tap to see the original: ${message.original_text}`;
 }
 
 function MessageBubbleComponent({
@@ -54,22 +53,20 @@ function MessageBubbleComponent({
   isMine,
   isLastInGroup,
   animateIn,
-  tiltSide,
   isLatestMine,
   onRetry,
   onDelete,
   onRetryTranslation,
 }: MessageBubbleProps) {
-  const { colors, typography, radii, duration, revealTilt, bubbleTilt } = useTheme();
+  const { colors, typography, radii, duration, isDark } = useTheme();
   const reduced = useReducedMotion();
   const [expanded, setExpanded] = useState(false);
   const [revealHeight, setRevealHeight] = useState(0);
-  const { onPressIn, onPressOut, style: pressStyle } = usePressable();
+  const { onPressIn, onPressOut, style: pressStyle } = usePressable({ scale: 0.98 });
 
   const canExpand =
     !isMine && message.translation_status === 'translated' && Boolean(message.translated_text);
   const hasFailed = !isMine && message.translation_status === 'failed';
-  const isPending = !isMine && message.translation_status === 'pending';
 
   const bodyRtl = isRtl(isMine ? message.source_language : message.target_language);
   const originalRtl = isRtl(message.source_language);
@@ -77,47 +74,34 @@ function MessageBubbleComponent({
   /* ------------------------------------------------------ enter animations */
 
   const enter = useSharedValue(animateIn ? 0 : 1);
-  const pop = useSharedValue(1);
 
   useEffect(() => {
     if (!animateIn) return;
-    enter.value = withTiming(1, timingConfig(duration.base));
-    if (isMine) pop.value = withSpring(1, springConfig);
-  }, [animateIn, duration.base, isMine, enter, pop]);
+    enter.set(
+      withTiming(1, {
+        ...timingConfig(duration.fast),
+        easing: Easing.bezier(0.23, 1, 0.32, 1),
+      })
+    );
+  }, [animateIn, duration.fast, enter]);
 
-  const enterStyle = useAnimatedStyle(() =>
-    reduced
-      ? { opacity: enter.value }
-      : {
-          opacity: enter.value,
-          transform: [
-            { translateY: (1 - enter.value) * entrance.rise },
-            { scale: entrance.from + (1 - entrance.from) * pop.value },
-          ],
-        }
-  );
+  const enterStyle = useAnimatedStyle(() => ({ opacity: enter.get() }));
 
   /* --------------------------------------------------------- reveal spring */
 
   const reveal = useSharedValue(0);
   useEffect(() => {
-    // Reduced Motion opens the translation with a plain fade, so the height is
-    // applied without a spring snapping it into place.
-    reveal.value = reduced
-      ? withTiming(expanded ? 1 : 0, timingConfig(duration.base))
-      : withSpring(expanded ? 1 : 0, springConfig);
+    reveal.set(
+      reduced
+        ? withTiming(expanded ? 1 : 0, timingConfig(duration.base))
+        : withSpring(expanded ? 1 : 0, springConfig)
+    );
   }, [expanded, reduced, duration.base, reveal]);
 
   const revealStyle = useAnimatedStyle(() => ({
-    height: reveal.value * revealHeight,
-    opacity: reveal.value,
+    height: reveal.get() * revealHeight,
+    opacity: reveal.get(),
   }));
-
-  // The original tilts out slightly as it opens. Under Reduce Motion it only
-  // fades — the reveal is still legible without the movement.
-  const revealTiltStyle = useAnimatedStyle(() =>
-    reduced ? {} : { transform: [{ rotate: `${reveal.value * revealTilt}deg` }] }
-  );
 
   const toggle = useCallback(() => {
     if (!canExpand) return;
@@ -138,63 +122,55 @@ function MessageBubbleComponent({
         disabled={!canExpand}
         accessibilityRole={canExpand ? 'button' : 'text'}
         accessibilityLabel={describe(message, isMine, body)}
-        accessibilityHint={canExpand ? 'Shows the original message' : undefined}
+        accessibilityHint={
+          canExpand ? (expanded ? 'Hides the original message' : 'Shows the original message') : undefined
+        }
         accessibilityState={canExpand ? { expanded } : undefined}
         testID={`bubble-${message.id}`}
         style={[
           styles.bubble,
           {
-            backgroundColor: isMine ? colors.accent : colors.surface,
+            backgroundColor: isMine
+              ? colors.accent
+              : isDark
+              ? 'rgba(255, 255, 255, 0.08)'
+              : colors.surface,
+            borderColor: isMine
+              ? 'transparent'
+              : isDark
+              ? 'rgba(255, 255, 255, 0.10)'
+              : colors.border,
+            borderWidth: isMine ? 0 : 1,
             borderRadius: radii.bubble,
-            // The tail-side bottom corner tightens, which is what makes a run of
-            // bubbles read as one block.
             borderBottomRightRadius: isMine ? radii.bubbleTail : radii.bubble,
             borderBottomLeftRadius: isMine ? radii.bubble : radii.bubbleTail,
             marginBottom: RUN_GAP,
           },
           canExpand ? pressStyle : null,
-          // No lean under Reduce Motion, and none on the newest message: a
-          // rotation on the message you are looking at is just noise.
-          reduced || isLatestMine ? null : { transform: [{ rotate: `${tiltSide * bubbleTilt}deg` }] },
         ]}
       >
         <Text style={[typography.message, { color: textColor }, bodyRtl ? styles.rtl : null]}>
           {body}
         </Text>
 
-        {isPending ? (
-          <Text style={[typography.caption, styles.note, { color: colors.textMuted }]}>Translating…</Text>
-        ) : null}
-
-        {hasFailed ? (
-          <View style={styles.failedRow}>
-            <Text
-              accessibilityLiveRegion="polite"
-              style={[typography.caption, styles.note, { color: colors.danger }]}
-            >
-              Couldn&apos;t translate this time.
+        {canExpand ? (
+          <View style={[styles.translationLabels, styles.caption]}>
+            <Text style={[typography.caption, { color: isMine ? colors.onAccent : colors.info }]}>Translated</Text>
+            <Text style={[typography.caption, { color: isMine ? colors.onAccent : colors.info }]}>·</Text>
+            <Text style={[typography.caption, { color: isMine ? colors.onAccent : colors.info }]}>
+              {expanded ? 'Hide original' : 'Original'}
             </Text>
-            <RetryChip label="Try again" onPress={() => onRetryTranslation(message)} />
           </View>
         ) : null}
 
         {canExpand ? (
-          <Text style={[typography.caption, styles.caption, { color: colors.info }]}>Translated</Text>
-        ) : null}
-
-        {/*
-          The original is revealed in place: same bubble, a divider, a label.
-          Height is spring-animated from a measured content height, so the
-          bubble grows instead of snapping.
-        */}
-        {canExpand ? (
           <Animated.View style={[styles.reveal, revealStyle]}>
             <Animated.View
-              style={[styles.revealInner, revealTiltStyle]}
+              style={styles.revealInner}
               onLayout={(event) => setRevealHeight(event.nativeEvent.layout.height)}
             >
-              <View style={[styles.divider, { backgroundColor: colors.border }]} />
-              <Text style={[typography.label, { color: colors.info }]}>ORIGINAL</Text>
+              <View style={[styles.divider, { backgroundColor: isDark ? 'rgba(255,255,255,0.12)' : colors.border }]} />
+              <Text style={[typography.label, { color: colors.info }]}>Original</Text>
               <Text
                 style={[
                   typography.body,
@@ -210,9 +186,26 @@ function MessageBubbleComponent({
         ) : null}
       </AnimatedPressable>
 
+      {hasFailed ? (
+        <View style={styles.failedRow}>
+          <Text
+            accessibilityLiveRegion="polite"
+            style={[typography.caption, styles.note, { color: colors.danger }]}
+          >
+            Couldn’t translate that one.
+          </Text>
+          <RetryChip
+            label="Retry"
+            accessibilityLabel="Retry translation"
+            onPress={() => onRetryTranslation(message)}
+            testID={`retry-translation-${message.id}`}
+          />
+        </View>
+      ) : null}
+
       {isLastInGroup || isLatestMine ? (
         <View style={[styles.footer, isMine ? styles.footerEnd : styles.footerStart]}>
-          <Text style={[typography.caption, { color: colors.textMuted }]}>
+          <Text style={[typography.caption, styles.timeText, { color: colors.textMuted }]}>
             {formatClock(message.created_at)}
           </Text>
           {isLatestMine ? (
@@ -224,9 +217,19 @@ function MessageBubbleComponent({
   );
 }
 
-function RetryChip({ label, onPress }: { label: string; onPress: () => void }) {
+function RetryChip({
+  label,
+  onPress,
+  testID,
+  accessibilityLabel = label,
+}: {
+  label: string;
+  onPress: () => void;
+  testID?: string;
+  accessibilityLabel?: string;
+}) {
   const { colors, typography, radii } = useTheme();
-  const { onPressIn, onPressOut, style } = usePressable();
+  const { onPressIn, onPressOut, style } = usePressable({ scale: 0.94 });
 
   return (
     <AnimatedPressable
@@ -234,7 +237,8 @@ function RetryChip({ label, onPress }: { label: string; onPress: () => void }) {
       onPressIn={onPressIn}
       onPressOut={onPressOut}
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel}
+      testID={testID}
       hitSlop={10}
       style={[
         styles.chip,
@@ -259,30 +263,30 @@ function StatusTick({
   onDelete: (message: LocalMessage) => void;
 }) {
   const { colors, typography } = useTheme();
-  const { onPressIn, onPressOut, style } = usePressable();
 
   if (state === 'failed') {
-    // Tapping the warning retries; long-pressing offers the way out, so a
-    // message that will never send does not sit there forever.
     return (
-      <AnimatedPressable
-        onPress={() => onRetry(message)}
-        onLongPress={() => onDelete(message)}
-        onPressIn={onPressIn}
-        onPressOut={onPressOut}
-        accessibilityRole="button"
-        accessibilityLabel="Not sent. Tap to retry, or long-press to delete"
-        testID={`retry-${message.id}`}
-        style={style}
-      >
-        <Text style={[typography.caption, { color: colors.danger }]}>Not sent. Tap to retry</Text>
-      </AnimatedPressable>
+      <View style={styles.failedStatus} accessibilityLabel="Not sent">
+        <Text style={[typography.caption, { color: colors.danger }]}>Not sent</Text>
+        <RetryChip
+          label="Retry"
+          accessibilityLabel="Retry message"
+          onPress={() => onRetry(message)}
+          testID={`retry-${message.id}`}
+        />
+        <RetryChip
+          label="Delete"
+          accessibilityLabel="Delete unsent message"
+          onPress={() => onDelete(message)}
+          testID={`delete-${message.id}`}
+        />
+      </View>
     );
   }
 
   if (state === 'sending') {
     return (
-      <View style={styles.tick} accessibilityLabel="Sending">
+      <View style={styles.tick} accessibilityLabel="Sending…">
         <Icon name="clock" size={14} color={colors.textMuted} />
       </View>
     );
@@ -323,18 +327,29 @@ const styles = StyleSheet.create({
   wrapper: { maxWidth: '82%' },
   alignEnd: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   alignStart: { alignSelf: 'flex-start', alignItems: 'flex-start' },
-  bubble: { paddingHorizontal: 14, paddingVertical: 10 },
+  bubble: {
+    paddingHorizontal: 15,
+    paddingVertical: 11,
+    borderCurve: 'continuous',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+  },
   caption: { marginTop: 4, alignSelf: 'flex-start' },
+  translationLabels: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   note: { marginTop: 4 },
   failedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  chip: { borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4 },
+  failedStatus: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  chip: { borderWidth: 1, paddingHorizontal: 10, paddingVertical: 4, borderCurve: 'continuous' },
   reveal: { overflow: 'hidden' },
-  // Absolutely positioned so the content can be measured while height is 0.
   revealInner: { position: 'absolute', left: 0, right: 0, top: 0 },
   divider: { height: StyleSheet.hairlineWidth, marginTop: 10, marginBottom: 8 },
   original: { marginTop: 4 },
   rtl: { textAlign: 'right', writingDirection: 'rtl' },
   footer: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 4, marginTop: 2 },
+  timeText: { fontVariant: ['tabular-nums'], fontSize: 11 },
   footerEnd: { justifyContent: 'flex-end' },
   footerStart: { justifyContent: 'flex-start' },
   tick: { width: 18, alignItems: 'flex-end' },

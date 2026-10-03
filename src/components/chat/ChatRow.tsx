@@ -1,11 +1,6 @@
 /**
  * A single row in the Chats list: who, when, and the last line in the language
  * you read.
- *
- * Two details worth calling out. Translation failures degrade quietly here —
- * the row shows the original rather than an error, because a list is a scanning
- * surface and a red warning per row would shout over the names. And unread is a
- * single dot, not a count badge: Melo has three users, so a number is noise.
  */
 import { memo, useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -22,7 +17,6 @@ import Animated, {
 import { useTheme } from '@/hooks/useTheme';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { AnimatedPressable, usePressable } from '@/hooks/usePressable';
-import { nativeLanguageName } from '@/constants/languages';
 import { previewTextFor } from '@/services/messages';
 import { formatRelativeTime } from '@/utils/time';
 import type { ChatSummary } from '@/types/models';
@@ -38,14 +32,14 @@ export interface ChatRowProps {
 }
 
 function ChatRowComponent({ chat, myId, online, onPress }: ChatRowProps) {
-  const { colors, typography, spacing, radii, screenPadding } = useTheme();
+  const { colors, typography, spacing, radii, screenPadding, isDark } = useTheme();
   const { friend, lastMessage } = chat;
-  const { onPressIn, onPressOut, style: pressStyle } = usePressable();
+  const { onPressIn, onPressOut, style: pressStyle } = usePressable({ scale: 0.975 });
 
   const isMine = lastMessage?.sender_id === myId;
   const preview = lastMessage
     ? previewTextFor(lastMessage, isMine)
-    : `Say hello in ${nativeLanguageName(friend.reading_language)}`;
+    : 'Say something…';
   const untranslated =
     !!lastMessage && !isMine && lastMessage.translation_status === 'failed';
   const unread = chat.unreadCount > 0;
@@ -62,7 +56,9 @@ function ChatRowComponent({ chat, myId, online, onPress }: ChatRowProps) {
       style={[
         styles.row,
         {
-          backgroundColor: colors.surface,
+          backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : colors.surface,
+          borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : colors.border,
+          borderWidth: 1,
           borderRadius: radii.row,
           marginHorizontal: screenPadding,
           marginBottom: spacing.sm,
@@ -72,17 +68,25 @@ function ChatRowComponent({ chat, myId, online, onPress }: ChatRowProps) {
         pressStyle,
       ]}
     >
-      <Avatar name={friend.display_name} size={50} presence={online ? 'online' : 'offline'} />
+      <Avatar
+        name={friend.display_name}
+        avatarKey={friend.avatar_key}
+        size={50}
+        presence={online ? 'online' : 'offline'}
+      />
 
       <View style={styles.body}>
         <View style={styles.topLine}>
-          <Text style={[typography.bodyStrong, styles.name, { color: colors.textPrimary }]} numberOfLines={1}>
+          <Text
+            style={[typography.bodyStrong, styles.name, { color: colors.textPrimary }]}
+            numberOfLines={1}
+          >
             {friend.display_name}
           </Text>
           <View style={styles.timeRow}>
             {unread ? <UnreadDot /> : null}
             {lastMessage ? (
-              <Text style={[typography.caption, { color: colors.textMuted }]}>
+              <Text style={[typography.caption, styles.time, { color: colors.textMuted }]}>
                 {formatRelativeTime(lastMessage.created_at)}
               </Text>
             ) : null}
@@ -90,9 +94,13 @@ function ChatRowComponent({ chat, myId, online, onPress }: ChatRowProps) {
         </View>
 
         <View style={styles.bottomLine}>
-          {untranslated ? <Icon name="alert" size={13} color={colors.textMuted} /> : null}
+          {untranslated ? <Icon name="alert" size={13} color={colors.danger} /> : null}
           <Text
-            style={[typography.body, styles.preview, { color: colors.textMuted }]}
+            style={[
+              typography.body,
+              styles.preview,
+              { color: unread ? colors.textPrimary : colors.textMuted, fontWeight: unread ? '500' : '400' },
+            ]}
             numberOfLines={1}
           >
             {preview}
@@ -111,8 +119,6 @@ function UnreadDot() {
 
   useEffect(() => {
     if (reduced) {
-      // Cancel a pulse that may already be running and park the dot at rest, so
-      // toggling the setting mid-animation cannot leave it mid-scale.
       cancelAnimation(pulse);
       pulse.value = 1;
       return;
@@ -141,12 +147,23 @@ function UnreadDot() {
 export const ChatRow = memo(ChatRowComponent);
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderCurve: 'continuous',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 1,
+  },
   body: { flex: 1, gap: 4 },
   topLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  name: { flex: 1, fontSize: 16 },
+  name: { flex: 1, fontSize: 16, letterSpacing: -0.2 },
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  time: { fontVariant: ['tabular-nums'], fontSize: 12 },
   bottomLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  preview: { flex: 1, fontSize: 14 },
+  preview: { flex: 1, fontSize: 14, lineHeight: 18 },
   dot: { width: 8, height: 8, borderRadius: 4 },
 });

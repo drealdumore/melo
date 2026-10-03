@@ -27,7 +27,10 @@ import {
   type ChannelStatus,
 } from '@/services/realtime';
 import { useProfile } from '@/hooks/useProfile';
+import { createLogger } from '@/services/logger';
 import type { PresenceState } from '@/types/models';
+
+const log = createLogger('presence.app');
 
 interface AppPresenceValue {
   /** Everyone in the app, keyed by user id. */
@@ -67,7 +70,14 @@ export function AppPresenceProvider({ children }: { children: ReactNode }) {
         }
         setEntries(byId);
       },
-      onStatusChange: (status: ChannelStatus) => setLive(status === 'subscribed'),
+      onStatusChange: (status: ChannelStatus) => {
+        setLive(status === 'subscribed');
+        if (status !== 'subscribed') {
+          // Every ring in the app is about to fall back to "offline", which is
+          // indistinguishable from a friend who actually left.
+          log.warn(`app presence is ${status}; online rings are now guesses`);
+        }
+      },
     });
     subscriptionRef.current = subscription;
 
@@ -84,8 +94,13 @@ export function AppPresenceProvider({ children }: { children: ReactNode }) {
     if (!subscription) return;
 
     const handle = (state: AppStateStatus) => {
-      if (state === 'active') subscription.update(activeRoomRef.current);
-      else void subscription.untrack();
+      if (state === 'active') {
+        log.debug('foreground: re-advertising presence');
+        subscription.update(activeRoomRef.current);
+      } else {
+        log.debug(`backgrounding (${state}): untracking presence`);
+        void subscription.untrack();
+      }
     };
 
     const listener = AppState.addEventListener('change', handle);
@@ -94,6 +109,9 @@ export function AppPresenceProvider({ children }: { children: ReactNode }) {
 
   const setActiveRoom = useCallback((roomId: string | null) => {
     activeRoomRef.current = roomId;
+    // This is the user moving between the chats list and a conversation, and
+    // it is the only thing that separates a solid ring from a dashed one.
+    log.info(roomId ? `user is now viewing ${roomId}` : 'user left the chat', { roomId });
     subscriptionRef.current?.update(roomId);
   }, []);
 

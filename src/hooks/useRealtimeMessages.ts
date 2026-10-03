@@ -29,11 +29,14 @@ import {
   type ChannelStatus,
   type RoomSubscription,
 } from '@/services/realtime';
+import { createLogger } from '@/services/logger';
 import type { LocalMessage, Message, Profile, SendState } from '@/types/models';
 
 const READ_DEBOUNCE_MS = 300;
 const TYPING_IDLE_MS = 3000;
 const PRESENCE_HEARTBEAT_MS = 25_000;
+
+const log = createLogger('messages.live');
 
 export interface UseRealtimeMessagesResult {
   messages: LocalMessage[];
@@ -116,9 +119,19 @@ export function useRealtimeMessages({
       const rows = since
         ? await loadMessagesSince(roomId, since)
         : await loadMessages(roomId, HISTORY_LIMIT);
+      // A catch-up that returns nothing after a reconnect is the interesting
+      // case: it means the gap really was empty, rather than the fetch failing.
+      log.debug(`caught up on ${roomId}`, {
+        rows: rows.length,
+        mode: since ? 'since-last-seen' : 'full-history',
+      });
       ingest(rows);
     } catch (error) {
-      console.warn('Could not load messages', error);
+      // History is the app's only record of a conversation. If this fails the
+      // screen shows an empty chat, which reads as "they never spoke".
+      log.error(`could not load messages for ${roomId}`, {
+        mode: since ? 'since-last-seen' : 'full-history',
+      }, error);
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -136,6 +149,7 @@ export function useRealtimeMessages({
     const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
       const isActive = next === 'active';
       setAppIsActive(isActive);
+      log.info(`app ${isActive ? 'came to the foreground' : 'went to the background'}`);
       if (isActive) {
         // Foreground: re-announce presence and pull anything we missed.
         subscriptionRef.current?.heartbeat();
@@ -154,6 +168,7 @@ export function useRealtimeMessages({
 
     let cancelled = false;
     lastSeenCreatedAtRef.current = null;
+    log.info(`taking the channel for ${roomId} (active=${active})`);
     // No `setLoading(true)` here on purpose: `loading` starts true, and on a
     // later resubscribe the history we already hold is better than a spinner —
     // `catchUp` merges into it.
@@ -161,6 +176,7 @@ export function useRealtimeMessages({
 
     const connect = () => {
       if (cancelled) return;
+      log.debug(`connect() for ${roomId}`);
       try {
         subscriptionRef.current = subscribeToRoom(roomId, me.id, {
           onMessage: (message) => ingest([message]),
@@ -196,7 +212,11 @@ export function useRealtimeMessages({
           },
         });
       } catch (error) {
-        console.warn('Could not open the realtime channel', error);
+        // Thrown synchronously by `requireSupabase` when the app is not
+        // configured at all, so this is a configuration problem, not a network one.
+        log.error(`the realtime channel for ${roomId} could not be opened`, {
+          cause: 'Supabase is probably not configured on this build',
+        }, error);
         setStatus('error');
       }
     };
@@ -209,6 +229,7 @@ export function useRealtimeMessages({
 
     return () => {
       cancelled = true;
+      log.info(`releasing the channel for ${roomId}`);
       clearInterval(presenceTimer);
       cancelRetryRef.current?.();
       cancelRetryRef.current = null;
@@ -293,13 +314,23 @@ export function useRealtimeMessages({
    * `pending` while a retry runs. Server fields only — `sendState` stays local.
    */
   const patchLocalMessage = useCallback(
-    (id: string, patch: Partial<Pick<LocalMessage, 'translation_status' | 'translated_text'>>) => {
+    (
+      id: string,
+      patch: Partial<
+        Pick<LocalMessage, 'translation_status' | 'translated_text' | 'target_language'>
+      >
+    ) => {
       if (!mountedRef.current) return;
       setMessages((current) => {
         const index = current.findIndex((m) => m.id === id);
         if (index === -1) return current;
         const target = current[index] as LocalMessage;
-        if (target.translation_status === patch.translation_status) return current;
+        if (
+          target.translation_status === patch.translation_status &&
+          target.target_language === patch.target_language
+        ) {
+          return current;
+        }
         const next = [...current];
         next[index] = { ...target, ...patch };
         return next;

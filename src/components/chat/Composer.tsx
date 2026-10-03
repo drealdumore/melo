@@ -1,10 +1,6 @@
 /**
  * The composer: a floating card, a growing field, and a circular send button
- * that only exists while there is something to send.
- *
- * The field grows to about five lines and then scrolls, because a composer that
- * takes over the screen is worse than one that scrolls. Sending clears the input
- * immediately and nothing waits on the network.
+ * that animates in smoothly when there is something to send.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
@@ -31,11 +27,11 @@ export interface ComposerProps {
 }
 
 export function Composer({ onSend, onTypingChange, disabled = false }: ComposerProps) {
-  const { colors, typography, radii, sizes, springConfig, screenPadding } = useTheme();
+  const { colors, typography, radii, sizes, springConfig, screenPadding, isDark } = useTheme();
   const reduced = useReducedMotion();
   const [text, setText] = useState('');
   const [contentHeight, setContentHeight] = useState(0);
-  const { onPressIn, onPressOut, style: pressStyle } = usePressable({ haptic: true });
+  const { onPressIn, onPressOut, style: pressStyle } = usePressable({ haptic: true, scale: 0.92 });
 
   const canSend = text.trim().length > 0 && !disabled;
   const nearLimit = text.length > MAX_MESSAGE_LENGTH * 0.9;
@@ -62,7 +58,6 @@ export function Composer({ onSend, onTypingChange, disabled = false }: ComposerP
   const handleSend = useCallback(() => {
     if (!canSend) return;
     const value = text;
-    // Clear first: the composer must never feel like it is waiting on the network.
     setText('');
     setContentHeight(0);
     onTypingChange(false);
@@ -75,8 +70,8 @@ export function Composer({ onSend, onTypingChange, disabled = false }: ComposerP
         style={[
           styles.card,
           {
-            backgroundColor: colors.surface,
-            borderColor: colors.border,
+            backgroundColor: isDark ? 'rgba(255, 255, 255, 0.07)' : colors.surface,
+            borderColor: isDark ? 'rgba(255, 255, 255, 0.12)' : colors.border,
             borderRadius: radii.pill,
             height: Math.min(Math.max(contentHeight || MIN_HEIGHT, MIN_HEIGHT), MAX_HEIGHT),
           },
@@ -85,12 +80,12 @@ export function Composer({ onSend, onTypingChange, disabled = false }: ComposerP
         <TextInput
           value={text}
           onChangeText={handleChange}
-          placeholder="Message"
+          placeholder="Say something in your language…"
           placeholderTextColor={colors.textMuted}
           multiline
           onContentSizeChange={(event) => setContentHeight(event.nativeEvent.contentSize.height + 4)}
           maxLength={MAX_MESSAGE_LENGTH}
-          accessibilityLabel="Message"
+          accessibilityLabel="Message input"
           testID="composer-input"
           style={[
             styles.input,
@@ -130,15 +125,21 @@ export function Composer({ onSend, onTypingChange, disabled = false }: ComposerP
 }
 
 const styles = StyleSheet.create({
-  root: { paddingTop: 8 },
+  root: { paddingTop: 6, position: 'relative' },
   card: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
+    borderCurve: 'continuous',
     paddingLeft: 18,
     paddingRight: 7,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  input: { flex: 1, paddingVertical: VERTICAL_PADDING, paddingRight: 8 },
-  counter: { position: 'absolute', right: 0, bottom: -18 },
+  input: { flex: 1, paddingVertical: VERTICAL_PADDING, paddingRight: 8, fontSize: 16 },
+  counter: { position: 'absolute', right: 24, top: -14 },
   send: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
 });

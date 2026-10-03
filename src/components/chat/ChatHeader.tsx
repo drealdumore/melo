@@ -7,16 +7,25 @@
  */
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { useTheme } from '@/hooks/useTheme';
-import { languageName, nativeLanguageName } from '@/constants/languages';
+import { languageName } from '@/constants/languages';
 import type { PresenceState } from '@/types/models';
 import { Avatar } from '@/components/ui/Avatar';
 import { IconButton } from '@/components/ui/IconButton';
 import { AnimatedPressable, usePressable } from '@/hooks/usePressable';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { duration, spring } from '@/theme/motion';
 
 export interface ChatHeaderProps {
   name: string;
+  avatarKey?: string | null;
   readingLanguage: string;
   myLanguage: string;
   presence: PresenceState;
@@ -30,6 +39,7 @@ export interface ChatHeaderProps {
 
 export function ChatHeader({
   name,
+  avatarKey,
   readingLanguage,
   myLanguage,
   presence,
@@ -39,69 +49,107 @@ export function ChatHeader({
   onPressName,
 }: ChatHeaderProps) {
   const { colors, typography, screenPadding } = useTheme();
+  const reduced = useReducedMotion();
   const [hintVisible, setHintVisible] = useState(false);
+  const [hintHeight, setHintHeight] = useState(0);
+  const hintH = useSharedValue(0);
+  const measured = hintHeight > 0;
 
   const online = presenceLive && presence === 'online';
-  const explanation = `Anything you write in ${languageName(myLanguage)} arrives here in ${languageName(
+  const explanation = `How this chat works\nYou write in ${languageName(myLanguage)}. ${name} reads it in ${languageName(
     readingLanguage
-  )}.`;
+  )}.\n${name} writes in ${languageName(readingLanguage)}. You read it in ${languageName(
+    myLanguage
+  )}.\nThat's it.`;
 
   const subtitle = online
     ? elsewhere
       ? 'In Melo'
-      : 'In your circle'
+      : 'Here now'
     : `Reads in ${languageName(readingLanguage)}`;
 
+  const hintContainerStyle = useAnimatedStyle(() => ({
+    height: hintH.value,
+    overflow: 'hidden',
+  }));
+
+  const toggleHint = () => {
+    if (!measured) return;
+    const next = !hintVisible;
+    setHintVisible(next);
+    const target = next ? hintHeight : 0;
+    hintH.value = reduced
+      ? withTiming(target, { duration: duration.fast })
+      : withSpring(target, { stiffness: spring.stiffness, damping: spring.damping, mass: 0.7 });
+  };
+
   return (
-    <View
-      style={[
-        styles.root,
-        { paddingHorizontal: screenPadding, backgroundColor: colors.background },
-      ]}
-    >
-      {/* Left Back Button */}
-      <IconButton
-        name="chevronLeft"
-        onPress={onBack}
-        accessibilityLabel="Back to chats"
-        size={42}
-        iconSize={22}
-        testID="chat-back"
-      />
-
-      {/* Center Profile & Info */}
-      <NameCenterButton
-        name={name}
-        subtitle={subtitle}
-        online={online}
-        elsewhere={elsewhere}
-        onPress={onPressName}
-      />
-
-      {/* Right Options / Details Button */}
-      <View style={styles.trailing}>
-        <LanguagePill
-          language={readingLanguage}
-          onPress={() => setHintVisible((value) => !value)}
-          expanded={hintVisible}
+    <View style={{ paddingHorizontal: screenPadding, backgroundColor: colors.background }}>
+      <View style={styles.row}>
+        <IconButton
+          name="chevronLeft"
+          onPress={onBack}
+          accessibilityLabel="Back to chats"
+          size={42}
+          iconSize={22}
+          testID="chat-back"
         />
+
+        <NameCenterButton
+          name={name}
+          avatarKey={avatarKey}
+          subtitle={subtitle}
+          online={online}
+          elsewhere={elsewhere}
+          onPress={onPressName}
+        />
+
+        <View style={styles.trailing}>
+          <LanguagePill
+            language={readingLanguage}
+            onPress={toggleHint}
+            expanded={hintVisible}
+          />
+        </View>
       </View>
 
-      {hintVisible ? (
-        <Text style={[typography.caption, styles.hint, { color: colors.textMuted }]}>{explanation}</Text>
-      ) : null}
+      {/* Animated panel — springs open and pushes the list down, never overlaps */}
+      <Animated.View style={hintContainerStyle}>
+        <Text style={[typography.caption, styles.hintText, { color: colors.textMuted }]}>
+          {explanation}
+        </Text>
+      </Animated.View>
+
+      {/* Off-screen clone measures the natural height before the first tap */}
+      <View
+        pointerEvents="none"
+        style={styles.measure}
+        onLayout={(e) => {
+          const h = e.nativeEvent.layout.height;
+          if (h > 0 && h !== hintHeight) {
+            setHintHeight(h);
+            if (hintVisible) hintH.value = h;
+          }
+        }}
+      >
+        <Text style={[typography.caption, styles.hintText, { color: colors.textMuted }]}>
+          {explanation}
+        </Text>
+      </View>
     </View>
   );
 }
 
 function NameCenterButton({
   name,
+  avatarKey,
   subtitle,
   online,
   elsewhere,
   onPress,
 }: {
   name: string;
+  avatarKey?: string | null;
   subtitle: string;
   online: boolean;
   elsewhere: boolean;
@@ -122,6 +170,7 @@ function NameCenterButton({
     >
       <Avatar
         name={name}
+        avatarKey={avatarKey}
         size={42}
         presence={online ? 'online' : 'offline'}
         idle={elsewhere && online}
@@ -162,30 +211,28 @@ function LanguagePill({
       style={[
         styles.pill,
         {
-          backgroundColor: colors.surface,
-          borderColor: colors.border,
+          backgroundColor: expanded ? colors.accentTint : colors.surface,
+          borderColor: expanded ? colors.accent : colors.border,
           borderRadius: radii.pill,
           paddingHorizontal: spacing.md,
         },
         style,
       ]}
     >
-      <Text
-        style={[typography.caption, { color: colors.textMuted }]}
-        numberOfLines={1}
-      >
-        {nativeLanguageName(language)}
+      <Text style={[typography.caption, { color: expanded ? colors.accent : colors.textMuted }]} numberOfLines={1}>
+        {languageName(language)}
       </Text>
     </AnimatedPressable>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 10 },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingBottom: 10 },
   centerContainer: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 8 },
   centerText: { alignItems: 'flex-start' },
   nameText: { fontSize: 16 },
   trailing: { alignItems: 'flex-end' },
   pill: { borderWidth: StyleSheet.hairlineWidth, paddingVertical: 6, minWidth: 42, alignItems: 'center' },
-  hint: { position: 'absolute', top: '100%', right: 20, left: 20, paddingTop: 6, textAlign: 'center' },
+  hintText: { textAlign: 'center', paddingBottom: 8 },
+  measure: { position: 'absolute', top: 0, left: 0, right: 0, opacity: 0 },
 });

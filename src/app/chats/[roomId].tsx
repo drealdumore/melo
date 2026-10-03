@@ -9,11 +9,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, StyleSheet, Text, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter, useIsFocused } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 import { useProfile } from '@/hooks/useProfile';
 import { useChat } from '@/hooks/useChat';
+import { useScreenInsets } from '@/hooks/useScreenInsets';
 import { useAppPresence } from '@/components/providers/AppPresenceProvider';
 import { useTheme } from '@/hooks/useTheme';
 import { isRoomId } from '@/services/rooms';
@@ -30,7 +30,7 @@ export default function ChatScreen() {
   const router = useRouter();
 
   const { colors, typography, spacing, radii } = useTheme();
-  const insets = useSafeAreaInsets();
+  const insets = useScreenInsets();
   const isFocused = useIsFocused();
   const { profile } = useProfile();
   const { presenceOf, isInRoom, setActiveRoom } = useAppPresence();
@@ -60,7 +60,10 @@ export default function ChatScreen() {
     return () => setActiveRoom(null);
   }, [isFocused, roomId, setActiveRoom]);
 
-  const openFriend = useCallback(() => setSheetOpen(true), []);
+  const openFriend = useCallback(() => {
+    console.log('[melo] openFriend tapped, friend:', friend?.display_name ?? 'null', 'sheetOpen:', sheetOpen);
+    setSheetOpen(true);
+  }, [friend, sheetOpen]);
   const closeFriend = useCallback(() => setSheetOpen(false), []);
 
   if (!isRoomId(roomId)) return <MissingRoom message="This chat link is incomplete." />;
@@ -73,11 +76,13 @@ export default function ChatScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: colors.background }]}>
-      <Stack.Screen options={{ headerShown: false, animation: 'slide_from_right' }} />
+      <Stack.Screen options={{ headerShown: false }} />
 
-      <View style={{ paddingTop: insets.top + 8 }}>
+      {/* ── Fixed header — outside KAV so keyboard never moves it ── */}
+      <View style={[styles.header, { paddingTop: insets.headerTop }]}>
         <ChatHeader
           name={friend?.display_name ?? '…'}
+          avatarKey={friend?.avatar_key}
           readingLanguage={friend?.reading_language ?? profile?.reading_language ?? 'en'}
           myLanguage={profile?.reading_language ?? 'en'}
           presence={presence}
@@ -88,39 +93,44 @@ export default function ChatScreen() {
         />
       </View>
 
+      {/* ── List + composer, keyboard-aware ── */}
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={0}
+      >
+        <View style={styles.flex}>
+          {loading && messages.length === 0 ? (
+            <ChatListSkeleton label="Opening chat…" />
+          ) : (
+            <ChatList
+              messages={messages}
+              meId={profile?.id ?? ''}
+              friendIsTyping={friendIsTyping}
+              onRetry={retry}
+              onDelete={discard}
+              onRetryTranslation={retryTranslation}
+            />
+          )}
+        </View>
+
+        <View style={[styles.composerWrap, { paddingBottom: insets.footerBottom }]}>
+          <Composer onSend={send} onTypingChange={noteTyping} disabled={!isFocused || !friend} />
+        </View>
+      </KeyboardAvoidingView>
+
+      {/* ── Reconnecting banner — absolute over everything, never in flow ── */}
       {reconnecting ? (
         <Animated.View
           entering={FadeIn.duration(180)}
           exiting={FadeOut.duration(140)}
-          style={[styles.banner, { backgroundColor: colors.surface, borderRadius: radii.pill }]}
+          style={[styles.banner, { top: insets.top + spacing.sm, backgroundColor: colors.surface, borderRadius: radii.pill }]}
           accessibilityLiveRegion="polite"
           testID="reconnecting"
         >
           <Text style={[typography.caption, { color: colors.textMuted }]}>Reconnecting…</Text>
         </Animated.View>
       ) : null}
-
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {loading && messages.length === 0 ? (
-          <ChatListSkeleton />
-        ) : (
-          <ChatList
-            messages={messages}
-            meId={profile?.id ?? ''}
-            friendIsTyping={friendIsTyping}
-            onRetry={retry}
-            onDelete={discard}
-            onRetryTranslation={retryTranslation}
-          />
-        )}
-
-        <View style={[styles.composerWrap, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
-          <Composer onSend={send} onTypingChange={noteTyping} disabled={!isFocused || !friend} />
-        </View>
-      </KeyboardAvoidingView>
 
       <FriendSheet
         visible={sheetOpen}
@@ -136,15 +146,15 @@ export default function ChatScreen() {
 }
 
 function MissingRoom({ message }: { message: string }) {
-  const { colors, typography, screenPadding } = useTheme();
-  const insets = useSafeAreaInsets();
+  const { colors, typography, screenPadding, spacing } = useTheme();
+  const insets = useScreenInsets();
   const router = useRouter();
 
   return (
     <View
       style={[
         styles.missing,
-        { backgroundColor: colors.background, paddingHorizontal: screenPadding, paddingTop: insets.top + 60 },
+        { backgroundColor: colors.background, paddingHorizontal: screenPadding, paddingTop: insets.headerTop + spacing.xxxl },
       ]}
     >
       <MeloMark size={40} color={colors.textMuted} />
@@ -160,12 +170,13 @@ function MissingRoom({ message }: { message: string }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  header: {
+    // Keeps the header above the keyboard and list at all times.
+    zIndex: 1,
+  },
   flex: { flex: 1 },
-  // The pill is overlaid rather than stacked, so showing it never moves the
-  // list the user is reading.
   banner: {
     position: 'absolute',
-    top: 0,
     alignSelf: 'center',
     zIndex: 10,
     paddingHorizontal: 14,

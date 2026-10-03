@@ -7,9 +7,12 @@
  * client-side and race-safe with `on conflict do nothing` followed by a select.
  */
 import { requireSupabase, isSupabaseConfigured } from '@/services/supabase';
-import { findProfileByMeloId, normalizeMeloId, isValidMeloId, MELO_ID_LENGTH } from '@/services/profile';
+import { findProfileByMeloId, normalizeMeloId, isValidMeloId, MELO_ID_MIN_LENGTH, MELO_ID_MAX_LENGTH } from '@/services/profile';
+import { createLogger } from '@/services/logger';
 import type { ConnectResult, Profile, Room } from '@/types/models';
 import type { TableRow } from '@/types/database';
+
+const log = createLogger('rooms');
 
 export const ROOM_ID_SEPARATOR = '-';
 
@@ -45,6 +48,7 @@ export async function findRoom(roomId: string): Promise<Room | null> {
     .eq('id', roomId)
     .maybeSingle();
   if (error) throw error;
+  log.debug(data ? `room ${roomId} exists` : `room ${roomId} does not exist yet`);
   return data;
 }
 
@@ -69,6 +73,7 @@ export async function createOrFindRoom(
 
   const roomId = roomIdFor(me.melo_id, friend.melo_id);
   const [userOneId, userTwoId] = orderedUserIds(me.id, friend.id);
+  log.info(`opening room ${roomId}`, { with: friend.display_name });
 
   const { error: insertError } = await requireSupabase()
     .from('rooms')
@@ -78,10 +83,17 @@ export async function createOrFindRoom(
     );
 
   // 23505 just means the other device won the race, which is a success for us.
-  if (insertError && insertError.code !== '23505') throw insertError;
+  if (insertError && insertError.code !== '23505') {
+    log.error(`could not create room ${roomId}`, insertError);
+    throw insertError;
+  }
+  if (insertError) log.debug(`room ${roomId} already existed; reusing it`);
 
   const room = await findRoom(roomId);
-  if (!room) throw new Error('Could not open the room. Try again.');
+  if (!room) {
+    log.error(`room ${roomId} is missing immediately after being created`);
+    throw new Error('Could not open the room. Try again.');
+  }
   return room;
 }
 
@@ -91,20 +103,37 @@ export async function createOrFindRoom(
  */
 export async function connectWithMeloId(me: Profile, rawMeloId: string): Promise<ConnectResult> {
   const meloId = normalizeMeloId(rawMeloId);
-  if (!isValidMeloId(meloId) || meloId.length !== MELO_ID_LENGTH) {
+  if (!isValidMeloId(meloId) || meloId.length < MELO_ID_MIN_LENGTH || meloId.length > MELO_ID_MAX_LENGTH) {
+    // Normalized rather than raw: the shape of what was typed is the useful
+    // part, and this is whatever the user pasted in, not a secret.
+    log.info(`connect rejected: "${meloId}" is not a valid Melo ID`, {
+      typedLength: rawMeloId.length,
+      normalizedLength: meloId.length,
+      expected: `${MELO_ID_MIN_LENGTH}-${MELO_ID_MAX_LENGTH} characters`,
+    });
     return { ok: false, reason: 'not_found' };
   }
-  if (meloId === me.melo_id) return { ok: false, reason: 'self' };
+  if (meloId === me.melo_id) {
+    log.info(`connect rejected: ${meloId} is this user's own ID`);
+    return { ok: false, reason: 'self' };
+  }
 
   try {
     const friend = await findProfileByMeloId(meloId);
-    if (!friend) return { ok: false, reason: 'not_found' };
-    if (friend.id === me.id) return { ok: false, reason: 'self' };
+    if (!friend) {
+      log.info(`connect failed: no profile has Melo ID ${meloId}`);
+      return { ok: false, reason: 'not_found' };
+    }
+    if (friend.id === me.id) {
+      log.info(`connect failed: ${meloId} is this user's own ID on another device`);
+      return { ok: false, reason: 'self' };
+    }
 
     const room = await createOrFindRoom(me, friend);
+    log.info(`connect ok: ${meloId} (${friend.display_name}) → room ${room.id}`);
     return { ok: true, roomId: room.id };
   } catch (error) {
-    console.error('connectWithMeloId failed', error);
+    log.error(`connect failed: ${meloId} hit an unexpected error`, error);
     return { ok: false, reason: 'unknown' };
   }
 }
@@ -118,7 +147,10 @@ export async function listChats(me: Profile): Promise<{ room: Room; friend: Prof
     .select('*')
     .or(`user_one_id.eq.${me.id},user_two_id.eq.${me.id}`);
   if (error) throw error;
-  if (!rooms?.length) return [];
+  if (!rooms?.length) {
+    log.info('no chats yet');
+    return [];
+  }
 
   const friendIds = rooms.map((room) =>
     room.user_one_id === me.id ? room.user_two_id : room.user_one_id
@@ -131,11 +163,24 @@ export async function listChats(me: Profile): Promise<{ room: Room; friend: Prof
   if (friendsError) throw friendsError;
 
   const byId = new Map((friends ?? []).map((p: Profile) => [p.id, p]));
-  return rooms.flatMap((room: TableRow<'rooms'>) => {
+  const chats = rooms.flatMap((room: TableRow<'rooms'>) => {
     const friendId = room.user_one_id === me.id ? room.user_two_id : room.user_one_id;
     const friend = byId.get(friendId);
     return friend ? [{ room, friend }] : [];
   });
+
+  // A room whose partner profile is missing is a real data problem, and it is
+  // invisible in the UI: the chat just silently does not appear.
+  const orphans = rooms.length - chats.length;
+  if (orphans > 0) {
+    log.warn(`${orphans} room(s) have a partner profile this client cannot read`, {
+      rooms: rooms.length,
+      shown: chats.length,
+      cause: 'likely row-level security, or a profile that was deleted',
+    });
+  }
+  log.info(`loaded ${chats.length} chat(s)`);
+  return chats;
 }
 
 /** The other participant of a room. */
